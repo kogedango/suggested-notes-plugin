@@ -1,0 +1,226 @@
+import type { BodyTokenIndex } from "../cache/bodyTokens";
+import type { InvertedIndex } from "../cache/inverted";
+import type { MetadataStore } from "../cache/metadata";
+import type {
+  FileSnapshot,
+  PluginSettings,
+  ScoredCandidate,
+  SharedReasons,
+  SuggestedTag,
+} from "../types";
+import {
+  isExcludedByFolder,
+  normalizeLinkSet,
+  normalizeTagSet,
+} from "../util/normalize";
+import { basename } from "../util/path";
+import { IDFTables } from "./idf";
+import { outlinkCountPenalty } from "./penalties";
+
+export class ScoringEngine {
+  private idf: IDFTables;
+
+  constructor(
+    private store: MetadataStore,
+    private inverted: InvertedIndex,
+    private body: BodyTokenIndex,
+  ) {
+    this.idf = new IDFTables(store, inverted);
+  }
+
+  markDirty(): void {
+    this.idf.markDirty();
+  }
+
+  score(activePath: string, settings: PluginSettings): ScoredCandidate[] {
+    const active = this.store.get(activePath);
+    if (!active) return [];
+
+    const excludedTags = normalizeTagSet(settings.excludedTags);
+    const excludedLinks = normalizeLinkSet(settings.excludedLinks);
+    const useBody = settings.bodyTokenEnabled && this.body.has(activePath);
+    const activeBodyTokens = useBody
+      ? this.body.salientFor(activePath)
+      : EMPTY_SET;
+
+    const candidates = new Set<string>();
+
+    for (const tag of active.tags) {
+      if (excludedTags.has(tag)) continue;
+      for (const p of this.inverted.filesWithTag(tag)) {
+        if (p !== activePath) candidates.add(p);
+      }
+    }
+    for (const link of active.outlinks) {
+      if (excludedLinks.has(basename(link))) continue;
+      for (const p of this.inverted.filesLinkingTo(link)) {
+        if (p !== activePath) candidates.add(p);
+      }
+    }
+    for (const p of active.backlinks) candidates.add(p);
+    for (const p of active.outlinks) {
+      if (p !== activePath) candidates.add(p);
+    }
+    if (useBody) {
+      for (const tok of activeBodyTokens) {
+        for (const p of this.body.filesWithToken(tok)) {
+          if (p !== activePath) candidates.add(p);
+        }
+      }
+    }
+
+    const scored: Array<{
+      snap: FileSnapshot;
+      raw: number;
+      reasons: SharedReasons;
+    }> = [];
+
+    for (const path of candidates) {
+      const snap = this.store.get(path);
+      if (!snap) continue;
+      if (isExcludedByFolder(snap.folder, settings.excludedFolders)) continue;
+
+      const reasons = this.computeReasons(
+        active,
+        snap,
+        settings,
+        activeBodyTokens,
+      );
+      const raw = this.rawScore(snap, reasons, settings, snap.folder === active.folder);
+      if (raw <= 0) continue;
+      scored.push({ snap, raw, reasons });
+    }
+
+    if (scored.length === 0) return [];
+
+    const top = scored.reduce((m, s) => (s.raw > m ? s.raw : m), 0) || 1;
+    const result: ScoredCandidate[] = scored.map((s) => ({
+      path: s.snap.path,
+      rawScore: s.raw,
+      displayScore: Math.round((s.raw / top) * 100),
+      reasons: s.reasons,
+      alreadyLinked: active.outlinks.has(s.snap.path),
+    }));
+
+    return result
+      .filter((c) => (settings.hideAlreadyLinked ? !c.alreadyLinked : true))
+      .sort((a, b) => b.rawScore - a.rawScore)
+      .slice(0, settings.maxResults);
+  }
+
+  // Item 3: candidate-pool Jaccard-style coverage × IDF.
+  // For each tag T not on the active note, score by
+  //   coverage(T) * idf(T) * avgNoteScore(T)
+  // where coverage is the fraction of top-K result notes that carry T.
+  // Filters: must appear in >=2 result notes AND have global df >=3
+  // (kills typos and one-off tags).
+  suggestTags(
+    activePath: string,
+    results: ScoredCandidate[],
+    settings: PluginSettings,
+    limit = 12,
+  ): SuggestedTag[] {
+    const active = this.store.get(activePath);
+    if (!active || results.length === 0) return [];
+
+    const excluded = normalizeTagSet(settings.excludedTags);
+    const total = results.length;
+    const maxRaw =
+      results.reduce((m, r) => (r.rawScore > m ? r.rawScore : m), 0) || 1;
+
+    const agg = new Map<
+      string,
+      { count: number; weightSum: number }
+    >();
+
+    for (const r of results) {
+      const snap = this.store.get(r.path);
+      if (!snap) continue;
+      const noteWeight = r.rawScore / maxRaw;
+      for (const t of snap.tags) {
+        if (active.tags.has(t)) continue;
+        if (excluded.has(t)) continue;
+        const idf = this.idf.tag(t);
+        if (idf <= 0) continue;
+        // Global rarity guard: ignore typos / one-off tags. With the existing
+        // tag inverted index, df=1 means only this candidate uses it.
+        if (this.inverted.notesWithTagCount(t) < 3) continue;
+        const cur = agg.get(t);
+        if (cur) {
+          cur.count += 1;
+          cur.weightSum += noteWeight;
+        } else {
+          agg.set(t, { count: 1, weightSum: noteWeight });
+        }
+      }
+    }
+
+    const out: SuggestedTag[] = [];
+    for (const [tag, v] of agg) {
+      if (v.count < 2) continue; // must co-occur in >=2 results
+      const coverage = v.count / total;
+      const avgWeight = v.weightSum / v.count;
+      const score = coverage * this.idf.tag(tag) * avgWeight;
+      out.push({ tag, weight: score, fromCount: v.count });
+    }
+    return out.sort((a, b) => b.weight - a.weight).slice(0, limit);
+  }
+
+  private computeReasons(
+    a: FileSnapshot,
+    b: FileSnapshot,
+    settings: PluginSettings,
+    activeBodyTokens: Set<string>,
+  ): SharedReasons {
+    const excludedTags = normalizeTagSet(settings.excludedTags);
+    const excludedLinks = normalizeLinkSet(settings.excludedLinks);
+
+    const sharedTags: string[] = [];
+    for (const t of a.tags) {
+      if (excludedTags.has(t)) continue;
+      if (b.tags.has(t)) sharedTags.push(t);
+    }
+    const sharedOutlinks: string[] = [];
+    for (const l of a.outlinks) {
+      if (excludedLinks.has(basename(l))) continue;
+      if (b.outlinks.has(l)) sharedOutlinks.push(l);
+    }
+    const sharedBacklinks: string[] = [];
+    for (const bl of a.backlinks) {
+      if (b.backlinks.has(bl)) sharedBacklinks.push(bl);
+    }
+    const sharedBodyTokens: string[] = [];
+    if (settings.bodyTokenEnabled && activeBodyTokens.size > 0) {
+      const bTokens = this.body.salientFor(b.path);
+      if (bTokens.size > 0) {
+        for (const tok of activeBodyTokens) {
+          if (bTokens.has(tok)) sharedBodyTokens.push(tok);
+        }
+      }
+    }
+    return { sharedTags, sharedOutlinks, sharedBacklinks, sharedBodyTokens };
+  }
+
+  private rawScore(
+    b: FileSnapshot,
+    r: SharedReasons,
+    settings: PluginSettings,
+    sameFolder: boolean,
+  ): number {
+    let s = 0;
+    for (const t of r.sharedTags) s += settings.tagWeight * this.idf.tag(t);
+    for (const l of r.sharedOutlinks)
+      s += settings.outlinkWeight * this.idf.link(l);
+    s += settings.backlinkWeight * r.sharedBacklinks.length;
+    if (settings.folderWeight > 0 && sameFolder) {
+      s += settings.folderWeight;
+    }
+    if (settings.bodyTokenEnabled) {
+      for (const tok of r.sharedBodyTokens)
+        s += settings.bodyTokenWeight * this.body.idf(tok);
+    }
+    return s / outlinkCountPenalty(b.outlinkCount);
+  }
+}
+
+const EMPTY_SET: Set<string> = new Set();

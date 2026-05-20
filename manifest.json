@@ -1,0 +1,9 @@
+{
+  "id": "suggested-notes",
+  "name": "Suggested Notes",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Sidebar plugin for Obsidian that suggests related notes based on shared tags, links, and body tokens.",
+  "author": "こげ団子",
+  "isDesktopOnly": false
+}

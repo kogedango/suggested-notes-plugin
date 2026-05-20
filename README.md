@@ -1,0 +1,93 @@
+# Suggested Notes
+
+A sidebar for [Obsidian](https://obsidian.md) that shows notes related to the active note.
+
+Uses shared tags, outlinks, backlinks, and rare body tokens as signals, with IDF and an outlink-count penalty as adjustments. Offline, no AI.
+
+[日本語 README](./README.ja.md)
+
+## Install
+
+Not in the community plugin store. Two options:
+
+### Via BRAT (recommended)
+
+1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin from the community store.
+2. Open BRAT settings → "Add Beta plugin" → enter `kogedango/suggested-notes-plugin`.
+3. Enable "Suggested Notes" under Community plugins.
+
+BRAT auto-updates the plugin when you release a new version.
+
+### Manual
+
+1. Download `main.js`, `manifest.json` (and `styles.css` if present) from the latest [Release](https://github.com/kogedango/suggested-notes-plugin/releases).
+2. Place them in `<vault>/.obsidian/plugins/suggested-notes/`.
+3. Reload Obsidian and enable "Suggested Notes" under Community plugins.
+
+## How it scores
+
+For each active note, candidates are narrowed via inverted indexes (`tag → files`, `link → files`, `token → files`) — never a full-vault scan. Each candidate is scored as a weighted sum of shared signals:
+
+| Signal | Default weight | Adjusted by |
+|---|---|---|
+| Shared outlinks | 8 | per-link IDF |
+| Shared tags | 5 | per-tag IDF |
+| Shared backlinks | 4 | — |
+| Shared body tokens | 1.5 | per-token IDF |
+
+The raw score is divided by the candidate's `log(1 + outlinkCount)` to suppress MOC / index notes from dominating results.
+
+Displayed scores are per-query normalized (top match = 100). Absolute values are not comparable across notes.
+
+### Why folder weight defaults to 0
+
+Notes in the same folder are often related for boring reasons (you put them there). Surfacing them as "related" crowds out genuinely useful suggestions. Configurable.
+
+## Body-token matching
+
+Picks up notes that share rare vocabulary even without explicit tags or links.
+
+- Strips frontmatter, code blocks, wikilinks, and hashtags from the body
+- Extracts English, katakana (3+ chars), and kanji (2+ chars) by regex — no morphological analyzer
+- Retains top-N salient tokens per note by IDF (default 40)
+- Tokens appearing in >40% of the vault are auto-excluded as stopwords
+
+On first load, all `.md` files are read asynchronously to build the index (~10–20s for 5,000 notes, doesn't block the UI). Incremental updates after that. Enabled by default.
+
+## Features
+
+- Sidebar listing related notes for the active file
+- Per-row preview on hover (~600ms dwell)
+- Copy-as-markdown-link button on each row
+- Suggested tags — tags that frequently appear in the result set but not on the active note. Click to add to frontmatter
+- Exclusions: folders / tags / outlinks ([details](#exclusion-semantics))
+
+## Settings
+
+| Setting | Default | Notes |
+|---|---|---|
+| Max results | 20 | |
+| Shared outlinks weight | 8 | |
+| Shared tags weight | 5 | |
+| Shared backlinks weight | 4 | |
+| Enable body-token matching | on | Off uses tags/links only |
+| Body-token weight | 1.5 | Keep low (1–2) |
+| Salient tokens per note | 40 | Top-N by IDF retained per note |
+| Show scores | on | |
+| Show shared reasons | on | What each match shares |
+| Hide already-linked | off | |
+| Excluded folders | — | One per line. `Daily/` and `/Daily` both work |
+| Excluded tags | — | One per line, no leading `#` |
+| Excluded links | — | One basename per line |
+
+### Exclusion semantics
+
+`excludedFolders` removes notes from results entirely.
+
+`excludedTags` and `excludedLinks` only ignore that signal during scoring — a note isn't hidden just because it carries an excluded tag, as long as it matches via other signals. This lets you down-weight noisy tags without losing genuinely related notes that happen to use them.
+
+To fully hide a class of notes, put them in a folder and exclude that folder.
+
+## License
+
+MIT

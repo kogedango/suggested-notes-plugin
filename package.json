@@ -1,0 +1,28 @@
+{
+  "name": "suggested-notes-plugin",
+  "version": "0.1.0",
+  "description": "Sidebar plugin for Obsidian that suggests related notes based on shared tags, links, and body tokens.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "typecheck": "tsc -noEmit -skipLibCheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "suggested-notes"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "latest",
+    "tslib": "^2.6.2",
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.6"
+  }
+}
