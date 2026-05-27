@@ -32,9 +32,12 @@
 .suggested-notes-score {
   font-variant-numeric: tabular-nums;
   font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-  min-width: 1.8em;
-  text-align: right;
+  color: var(--text-muted);
+  background-color: var(--background-modifier-hover);
+  border-radius: 999px;
+  padding: 1px 7px;
+  min-width: 1.5em;
+  text-align: center;
   flex-shrink: 0;
 }
 
