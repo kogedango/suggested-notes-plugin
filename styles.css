@@ -32,9 +32,16 @@
 .suggested-notes-score {
   font-variant-numeric: tabular-nums;
   font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-  min-width: 1.8em;
-  text-align: right;
+  color: var(--text-muted);
+  background-color: var(--background-modifier-hover);
+  border-radius: 999px;
+  padding: 1px 7px;
+  /* Fixed digit area sized for the 3-digit top score (100) with tabular-nums,
+     so 1-, 2-, and 3-digit scores render the same width and don't shift the
+     title column. content-box so the padding doesn't eat into the 3ch. */
+  box-sizing: content-box;
+  min-width: 3ch;
+  text-align: center;
   flex-shrink: 0;
 }
 
