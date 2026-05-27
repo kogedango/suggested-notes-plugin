@@ -14,6 +14,8 @@ import { RelatedNotesSettingTab } from "./settings/tab";
 import { DEFAULT_SETTINGS, PluginSettings } from "./types";
 import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
+const EMPTY_TOKENS: Set<string> = new Set();
+
 export default class RelatedNotesPlugin extends Plugin {
   settings!: PluginSettings;
   private store!: MetadataStore;
@@ -23,6 +25,8 @@ export default class RelatedNotesPlugin extends Plugin {
   private ready = false;
   private scheduleRefresh!: () => void;
   private bodyIndexBuilding = false;
+  private bodyRebuildPending = false;
+  private scheduleBodyRebuild!: () => void;
   private lastRefreshedPath: string | null = null;
 
   async onload(): Promise<void> {
@@ -53,7 +57,28 @@ export default class RelatedNotesPlugin extends Plugin {
       callback: () => this.activateView(),
     });
 
-    this.scheduleRefresh = debounce(() => this.refresh(), 300, true);
+    this.addCommand({
+      id: "rebuild-body-index",
+      name: "Rebuild body-token index",
+      callback: () => {
+        if (!this.settings.bodyTokenEnabled) {
+          new Notice("Body-token matching is disabled.");
+          return;
+        }
+        void this.rebuildBodyIndex();
+      },
+    });
+
+    this.scheduleRefresh = debounce(() => void this.refresh(), 300, true);
+
+    // Auto corpus rebuild: fire once after edits settle. Event-driven (a
+    // trailing debounce), not a polling loop — so it stays within the
+    // "no background process" constraint. Manual rebuild is also a command.
+    this.scheduleBodyRebuild = debounce(
+      () => void this.rebuildBodyIndex(),
+      3000,
+      true,
+    );
 
     // Active-leaf-change updates immediately if ready, otherwise leaves the
     // loading placeholder in place until resolved fires.
@@ -70,7 +95,7 @@ export default class RelatedNotesPlugin extends Plugin {
         const active = this.app.workspace.getActiveFile();
         const path = active?.path ?? null;
         if (path === this.lastRefreshedPath) return;
-        this.refresh();
+        void this.refresh();
       }),
     );
 
@@ -107,7 +132,7 @@ export default class RelatedNotesPlugin extends Plugin {
         if (!this.ready) return;
         const snap = this.store.remove(af.path);
         if (snap) this.inverted.remove(snap);
-        if (this.settings.bodyTokenEnabled) this.body.removeFile(af.path);
+        if (this.settings.bodyTokenEnabled) this.scheduleBodyRebuild();
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -120,9 +145,7 @@ export default class RelatedNotesPlugin extends Plugin {
         const { prev, next } = this.store.rename(oldPath, af);
         if (prev) this.inverted.remove({ ...prev, path: oldPath });
         this.inverted.add(next);
-        if (this.settings.bodyTokenEnabled) {
-          this.body.renameFile(oldPath, af.path);
-        }
+        if (this.settings.bodyTokenEnabled) this.scheduleBodyRebuild();
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -145,25 +168,34 @@ export default class RelatedNotesPlugin extends Plugin {
 
   invalidateAll(): void {
     this.scoring.markDirty();
-    this.refresh();
+    void this.refresh();
   }
 
-  // Called by settings tab when bodyTokenEnabled toggles on, or topN changes.
+  // Rebuilds the body-token corpus. Triggered on enable, on startup, by the
+  // manual command, and by the debounced post-edit timer. If a rebuild is
+  // requested while one is running, we run once more afterwards rather than
+  // dropping it — so the corpus always ends up reflecting the latest edits.
   async rebuildBodyIndex(): Promise<void> {
     if (!this.ready) return;
     if (!this.settings.bodyTokenEnabled) {
       this.body.clear();
-      this.refresh();
+      void this.refresh();
       return;
     }
-    if (this.bodyIndexBuilding) return;
+    if (this.bodyIndexBuilding) {
+      this.bodyRebuildPending = true;
+      return;
+    }
     this.bodyIndexBuilding = true;
     try {
-      await this.body.rebuildAll(this.settings.bodyTokenTopN);
+      do {
+        this.bodyRebuildPending = false;
+        await this.body.rebuildAll(this.settings.bodyTokenTopN);
+      } while (this.bodyRebuildPending);
     } finally {
       this.bodyIndexBuilding = false;
     }
-    this.refresh();
+    void this.refresh();
   }
 
   private waitForMetadataResolved(): Promise<void> {
@@ -185,7 +217,7 @@ export default class RelatedNotesPlugin extends Plugin {
     this.inverted.rebuild();
     this.scoring.markDirty();
     this.ready = true;
-    this.refresh();
+    void this.refresh();
     if (this.settings.bodyTokenEnabled) {
       void this.rebuildBodyIndex();
     }
@@ -197,11 +229,10 @@ export default class RelatedNotesPlugin extends Plugin {
     if (prev) this.inverted.remove(prev);
     this.inverted.add(next);
     this.scoring.markDirty();
-    if (this.settings.bodyTokenEnabled) {
-      void this.body
-        .updateFile(file, this.settings.bodyTokenTopN)
-        .then(() => this.scheduleRefresh());
-    }
+    // Body corpus is rebuilt coarsely, not per edit. The active note's own
+    // body tokens are read fresh at query time, so the edited note still
+    // reflects its latest text immediately when it's the one being viewed.
+    if (this.settings.bodyTokenEnabled) this.scheduleBodyRebuild();
     this.scheduleRefresh();
   }
 
@@ -225,7 +256,7 @@ export default class RelatedNotesPlugin extends Plugin {
     }
   }
 
-  private refresh(): void {
+  private async refresh(): Promise<void> {
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_RELATED_NOTES);
     if (leaves.length === 0) return;
 
@@ -241,10 +272,24 @@ export default class RelatedNotesPlugin extends Plugin {
     }
     this.lastRefreshedPath = active.path;
 
-    const results = this.scoring.score(active.path, this.settings);
+    // The active note's body tokens are read fresh on demand. Awaiting a file
+    // read opens a window in which the user may switch notes — if the active
+    // file changed while we were reading, drop this pass rather than render
+    // results for a note that's no longer in front of the user.
+    const activeBodyTokens =
+      this.settings.bodyTokenEnabled && this.body.isBuilt()
+        ? await this.body.computeSalient(active, this.settings.bodyTokenTopN)
+        : EMPTY_TOKENS;
+    if (this.app.workspace.getActiveFile()?.path !== active.path) return;
+
+    const { results, tagPool } = this.scoring.score(
+      active.path,
+      this.settings,
+      activeBodyTokens,
+    );
     const suggestedTags = this.scoring.suggestTags(
       active.path,
-      results,
+      tagPool,
       this.settings,
     );
     for (const l of leaves)

@@ -27,7 +27,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   backlinkWeight: 4,
   folderWeight: 0,
 
-  bodyTokenEnabled: true,
+  bodyTokenEnabled: false,
   bodyTokenWeight: 1.5,
   bodyTokenTopN: 40,
 
@@ -64,6 +64,16 @@ export interface ScoredCandidate {
   displayScore: number;
   reasons: SharedReasons;
   alreadyLinked: boolean;
+}
+
+export interface ScoreResult {
+  // What the related-notes list shows: respects `hideAlreadyLinked`.
+  results: ScoredCandidate[];
+  // What tag suggestions are mined from: the top relevant neighbours
+  // regardless of `hideAlreadyLinked`. Already-linked notes are the
+  // highest-confidence relevant neighbours, so they stay in the tag pool
+  // even when hidden from the list.
+  tagPool: ScoredCandidate[];
 }
 
 export interface SuggestedTag {

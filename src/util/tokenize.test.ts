@@ -93,6 +93,14 @@ describe("tokenize", () => {
     expect(out.has("repeat")).toBe(true);
   });
 
+  it("NFKC-normalizes full-width ascii and half-width katakana", () => {
+    // Full-width "Ｏbsidian" and half-width "ﾉｰﾄ" must fold to the same tokens
+    // as their plain forms, otherwise width variants never match.
+    const out = tokenize("Ｏｂｓｉｄｉａｎ のﾉｰﾄ");
+    expect(out.has("obsidian")).toBe(true);
+    expect(out.has("ノート")).toBe(true);
+  });
+
   it("mixes English and Japanese in one document", () => {
     const out = tokenize("これは Obsidian のプラグインの 関連ノート 機能");
     expect(out.has("obsidian")).toBe(true);

@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-The plugin is a metadata-only suggested-notes recommender. **No AI, no embeddings, no network, no background process, no full-text parsing** — these are hard product constraints, not implementation preferences. Reject suggestions that violate them.
+The plugin is a metadata-first suggested-notes recommender. **No AI, no embeddings, no network, no always-on background process** — these are hard product constraints, not implementation preferences. Reject suggestions that violate them.
+
+**Body-token matching is the one sanctioned exception to "metadata-only".** It reads note bodies (full-text), but is strictly **opt-in and OFF by default** (`bodyTokenEnabled`). The default experience remains pure metadata. Treat it as an enrichment, not a baseline — see the body-token section below for the architecture that keeps it within the remaining constraints.
 
 Core pipeline:
 
@@ -29,6 +31,16 @@ Weighted sum of shared signals (default weights: outlinks 8, tags 5, backlinks 4
 Displayed scores are **per-query normalized** (top candidate = 100); raw scores stay internal.
 
 Defaults: resolved links only (unresolved `[[wikilinks]]` ignored); aliases not supported in MVP; MVP insertion only **appends to the active note** (never mutates other notes).
+
+### Body-token matching (optional, OFF by default)
+
+An opt-in enrichment that surfaces notes sharing rare vocabulary even without shared tags/links. It tokenizes note bodies (NFKC-normalized; CJK + ASCII, stopword- and markdown-stripped), keeps the top-N salient tokens per note by IDF, and adds `bodyTokenWeight × tokenIDF` per shared salient token to the score.
+
+Architecture is a **corpus/query split** — this is what keeps full-text within the constraints, so preserve it:
+
+- **Corpus** (all notes: `df`, per-note `salient`, inverted index) is rebuilt *coarsely* — on enable, on startup, on the manual `Rebuild body-token index` command, and via a debounced pass after edits settle. It is **not** maintained per keystroke. Do not reintroduce incremental per-edit corpus updates: that path caused a df-corruption race and unbounded per-note token retention. The debounced rebuild is event-driven (a trailing debounce), not a polling loop — so it stays within "no always-on background process".
+- **Query** (the active note's salient tokens) is computed **fresh on demand** from a single `cachedRead` on each active-note change. This is the only body read in the hot path; it is naturally latest-wins, so the active note always reflects its current text.
+- Accepted trade-off: a recently-edited *other* note's body signal lags until the next corpus rebuild. This is intentional — match engineering effort to a marginal enrichment signal; don't chase per-edit corpus freshness.
 
 ## Commands
 

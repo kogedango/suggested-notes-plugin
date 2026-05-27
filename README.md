@@ -2,7 +2,7 @@
 
 A sidebar for [Obsidian](https://obsidian.md) that shows notes related to the active note.
 
-Uses shared tags, outlinks, backlinks, and rare body tokens as signals, with IDF and an outlink-count penalty as adjustments. Offline, no AI.
+Uses shared tags, outlinks, backlinks, and — optionally — rare body tokens as signals, with IDF and an outlink-count penalty as adjustments. Offline, no AI.
 
 [日本語 README](./README.ja.md)
 
@@ -45,14 +45,17 @@ Notes in the same folder are often related for boring reasons (you put them ther
 
 ## Body-token matching
 
-Picks up notes that share rare vocabulary even without explicit tags or links.
+**Optional, off by default.** Picks up notes that share rare vocabulary even without explicit tags or links. This is the only feature that reads note bodies; with it off, the plugin is metadata-only.
 
 - Strips frontmatter, code blocks, wikilinks, and hashtags from the body
-- Extracts English, katakana (3+ chars), and kanji (2+ chars) by regex — no morphological analyzer
+- NFKC-normalizes (so full-width / half-width variants match), then extracts English, katakana (3+ chars), and kanji (2+ chars) by regex — no morphological analyzer
 - Retains top-N salient tokens per note by IDF (default 40)
 - Tokens appearing in >40% of the vault are auto-excluded as stopwords
 
-On first load, all `.md` files are read asynchronously to build the index (~10–20s for 5,000 notes, doesn't block the UI). Incremental updates after that. Enabled by default.
+When enabled, it reads every `.md` once to build a whole-vault index (~10–20s for 5,000 notes, async, doesn't block the UI). After that:
+
+- The **active note is always re-read live**, so it reflects your latest edits immediately.
+- The whole-vault index **rebuilds coarsely** — automatically after edits settle, or on demand via the **Rebuild body-token index** command — not on every keystroke. A recently-edited *other* note may not surface by body similarity until the next rebuild.
 
 ## Features
 
@@ -70,7 +73,7 @@ On first load, all `.md` files are read asynchronously to build the index (~10�
 | Shared outlinks weight | 8 | |
 | Shared tags weight | 5 | |
 | Shared backlinks weight | 4 | |
-| Enable body-token matching | on | Off uses tags/links only |
+| Enable body-token matching | off | Optional. On reads all note bodies; off uses tags/links only |
 | Body-token weight | 1.5 | Keep low (1–2) |
 | Salient tokens per note | 40 | Top-N by IDF retained per note |
 | Show scores | on | |
