@@ -28,6 +28,7 @@ export default class RelatedNotesPlugin extends Plugin {
   private bodyRebuildPending = false;
   private scheduleBodyRebuild!: () => void;
   private lastRefreshedPath: string | null = null;
+  private refreshVersion = 0;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -257,6 +258,13 @@ export default class RelatedNotesPlugin extends Plugin {
   }
 
   private async refresh(): Promise<void> {
+    // Generation guard: every refresh claims a version up front. The async
+    // body read below lets refreshes overlap (and even two for the *same*
+    // note can finish out of order), so before rendering we check we are
+    // still the latest — otherwise a slower earlier pass could overwrite a
+    // newer one with stale results.
+    const version = ++this.refreshVersion;
+
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_RELATED_NOTES);
     if (leaves.length === 0) return;
 
@@ -272,15 +280,13 @@ export default class RelatedNotesPlugin extends Plugin {
     }
     this.lastRefreshedPath = active.path;
 
-    // The active note's body tokens are read fresh on demand. Awaiting a file
-    // read opens a window in which the user may switch notes — if the active
-    // file changed while we were reading, drop this pass rather than render
-    // results for a note that's no longer in front of the user.
+    // The active note's body tokens are read fresh on demand.
     const activeBodyTokens =
       this.settings.bodyTokenEnabled && this.body.isBuilt()
         ? await this.body.computeSalient(active, this.settings.bodyTokenTopN)
         : EMPTY_TOKENS;
-    if (this.app.workspace.getActiveFile()?.path !== active.path) return;
+    // A newer refresh started while we were reading — let it render instead.
+    if (version !== this.refreshVersion) return;
 
     const { results, tagPool } = this.scoring.score(
       active.path,
