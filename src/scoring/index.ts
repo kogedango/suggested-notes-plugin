@@ -4,6 +4,7 @@ import type { MetadataStore } from "../cache/metadata";
 import type {
   FileSnapshot,
   PluginSettings,
+  ScoreResult,
   ScoredCandidate,
   SharedReasons,
   SuggestedTag,
@@ -32,16 +33,20 @@ export class ScoringEngine {
     this.idf.markDirty();
   }
 
-  score(activePath: string, settings: PluginSettings): ScoredCandidate[] {
+  // `activeBodyTokens` is the active note's freshly-computed salient set
+  // (empty when body matching is off or the corpus isn't built yet). The
+  // caller computes it on demand; scoring only consumes the corpus here.
+  score(
+    activePath: string,
+    settings: PluginSettings,
+    activeBodyTokens: Set<string>,
+  ): ScoreResult {
     const active = this.store.get(activePath);
-    if (!active) return [];
+    if (!active) return { results: [], tagPool: [] };
 
     const excludedTags = normalizeTagSet(settings.excludedTags);
     const excludedLinks = normalizeLinkSet(settings.excludedLinks);
-    const useBody = settings.bodyTokenEnabled && this.body.has(activePath);
-    const activeBodyTokens = useBody
-      ? this.body.salientFor(activePath)
-      : EMPTY_SET;
+    const useBody = settings.bodyTokenEnabled && activeBodyTokens.size > 0;
 
     const candidates = new Set<string>();
 
@@ -91,49 +96,60 @@ export class ScoringEngine {
       scored.push({ snap, raw, reasons });
     }
 
-    if (scored.length === 0) return [];
+    if (scored.length === 0) return { results: [], tagPool: [] };
 
     const top = scored.reduce((m, s) => (s.raw > m ? s.raw : m), 0) || 1;
-    const result: ScoredCandidate[] = scored.map((s) => ({
-      path: s.snap.path,
-      rawScore: s.raw,
-      displayScore: Math.round((s.raw / top) * 100),
-      reasons: s.reasons,
-      alreadyLinked: active.outlinks.has(s.snap.path),
-    }));
+    const sorted: ScoredCandidate[] = scored
+      .map((s) => ({
+        path: s.snap.path,
+        rawScore: s.raw,
+        displayScore: Math.round((s.raw / top) * 100),
+        reasons: s.reasons,
+        alreadyLinked: active.outlinks.has(s.snap.path),
+      }))
+      .sort((a, b) => b.rawScore - a.rawScore);
 
-    return result
-      .filter((c) => (settings.hideAlreadyLinked ? !c.alreadyLinked : true))
-      .sort((a, b) => b.rawScore - a.rawScore)
-      .slice(0, settings.maxResults);
+    // Tag mining draws from the top relevant neighbours including
+    // already-linked ones; `hideAlreadyLinked` only declutters the list.
+    const tagPool = sorted.slice(0, settings.maxResults);
+    const results = (
+      settings.hideAlreadyLinked
+        ? sorted.filter((c) => !c.alreadyLinked)
+        : sorted
+    ).slice(0, settings.maxResults);
+
+    return { results, tagPool };
   }
 
   // Item 3: candidate-pool Jaccard-style coverage × IDF.
   // For each tag T not on the active note, score by
   //   coverage(T) * idf(T) * avgNoteScore(T)
-  // where coverage is the fraction of top-K result notes that carry T.
-  // Filters: must appear in >=2 result notes AND have global df >=3
+  // where coverage is the fraction of top-K pool notes that carry T.
+  // `pool` is the tag-mining set (top neighbours regardless of
+  // `hideAlreadyLinked`), not the displayed list — so hiding a linked note
+  // from the list does not drop its tags from suggestions.
+  // Filters: must appear in >=2 pool notes AND have global df >=3
   // (kills typos and one-off tags).
   suggestTags(
     activePath: string,
-    results: ScoredCandidate[],
+    pool: ScoredCandidate[],
     settings: PluginSettings,
     limit = 12,
   ): SuggestedTag[] {
     const active = this.store.get(activePath);
-    if (!active || results.length === 0) return [];
+    if (!active || pool.length === 0) return [];
 
     const excluded = normalizeTagSet(settings.excludedTags);
-    const total = results.length;
+    const total = pool.length;
     const maxRaw =
-      results.reduce((m, r) => (r.rawScore > m ? r.rawScore : m), 0) || 1;
+      pool.reduce((m, r) => (r.rawScore > m ? r.rawScore : m), 0) || 1;
 
     const agg = new Map<
       string,
       { count: number; weightSum: number }
     >();
 
-    for (const r of results) {
+    for (const r of pool) {
       const snap = this.store.get(r.path);
       if (!snap) continue;
       const noteWeight = r.rawScore / maxRaw;
@@ -157,7 +173,7 @@ export class ScoringEngine {
 
     const out: SuggestedTag[] = [];
     for (const [tag, v] of agg) {
-      if (v.count < 2) continue; // must co-occur in >=2 results
+      if (v.count < 2) continue; // must co-occur in >=2 pool notes
       const coverage = v.count / total;
       const avgWeight = v.weightSum / v.count;
       const score = coverage * this.idf.tag(tag) * avgWeight;
@@ -222,5 +238,3 @@ export class ScoringEngine {
     return s / outlinkCountPenalty(b.outlinkCount);
   }
 }
-
-const EMPTY_SET: Set<string> = new Set();

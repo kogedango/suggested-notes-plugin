@@ -56,8 +56,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "Body-token matching" });
     containerEl.createEl("p", {
       text:
-        "Picks up notes that share rare vocabulary even without explicit tags or links. " +
-        "On enable, reads every .md file once (async, ~10–20s for 5,000 notes) and updates incrementally after.",
+        "Optional. Picks up notes that share rare vocabulary even without explicit tags or links. " +
+        "Off by default: enabling reads every .md file once (async, ~10–20s for 5,000 notes) to build the index. " +
+        "The active note is always re-read live; the whole-vault index rebuilds after edits settle, or on demand via the 'Rebuild body-token index' command.",
       cls: "setting-item-description",
     });
 

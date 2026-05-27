@@ -8,7 +8,12 @@ const ASCII_STOPWORDS = new Set([
 ]);
 
 export function tokenize(body: string): Set<string> {
+  // NFKC folds full-width ASCII, half-width katakana, and decomposed kana into
+  // their canonical forms so "Ｏbsidian"/"ﾉｰﾄ" tokenize the same as the plain
+  // forms. Without this, the same word in different widths produces distinct
+  // tokens and never matches.
   const stripped = body
+    .normalize("NFKC")
     .replace(/^---\n[\s\S]*?\n---\n?/, "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`[^`]*`/g, " ")
