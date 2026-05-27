@@ -278,7 +278,6 @@ export default class RelatedNotesPlugin extends Plugin {
       for (const l of leaves) (l.view as RelatedNotesView).setLoading();
       return;
     }
-    this.lastRefreshedPath = active.path;
 
     // The active note's body tokens are read fresh on demand.
     const activeBodyTokens =
@@ -287,6 +286,10 @@ export default class RelatedNotesPlugin extends Plugin {
         : EMPTY_TOKENS;
     // A newer refresh started while we were reading — let it render instead.
     if (version !== this.refreshVersion) return;
+
+    // Set only once we've committed to rendering this note: a discarded
+    // pass must not leave lastRefreshedPath claiming a note we never showed.
+    this.lastRefreshedPath = active.path;
 
     const { results, tagPool } = this.scoring.score(
       active.path,
