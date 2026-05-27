@@ -36,10 +36,11 @@
   background-color: var(--background-modifier-hover);
   border-radius: 999px;
   padding: 1px 7px;
-  /* Fixed width sized for the 3-digit top score (100) + tabular-nums, so
-     1-, 2-, and 3-digit scores all render the same width and don't shift
-     the title column row to row. */
-  min-width: 2.4em;
+  /* Fixed digit area sized for the 3-digit top score (100) with tabular-nums,
+     so 1-, 2-, and 3-digit scores render the same width and don't shift the
+     title column. content-box so the padding doesn't eat into the 3ch. */
+  box-sizing: content-box;
+  min-width: 3ch;
   text-align: center;
   flex-shrink: 0;
 }
