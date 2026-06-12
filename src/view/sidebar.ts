@@ -42,6 +42,26 @@ export class RelatedNotesView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    // Modifier state can change without the mouse moving; track it globally
+    // so the info tooltip yields to the modifier-gated page preview the
+    // moment Cmd/Ctrl goes down (mouse listeners alone would miss it).
+    this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") {
+        this.lastModifier = true;
+        this.hideReasonsTip();
+      }
+    });
+    this.registerDomEvent(document, "keyup", (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") this.lastModifier = false;
+    });
+    // The tooltip is position:fixed and doesn't follow its row when the
+    // list scrolls — drop it instead of letting it float detached.
+    this.registerDomEvent(
+      this.containerEl,
+      "scroll",
+      () => this.hideReasonsTip(),
+      true,
+    );
     this.render();
   }
 
