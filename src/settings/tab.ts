@@ -72,6 +72,25 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl)
+      .setName("Japanese word segmentation (experimental)")
+      .setDesc(
+        "Splits Japanese text into words with TinySegmenter (offline, no dictionary) " +
+          "so okurigana-mixed words like 打ち合わせ and hiragana words like ひらめき " +
+          "also count as shared vocabulary. Changing this rebuilds the index.",
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.bodyTokenSegmenterEnabled)
+          .onChange(async (v) => {
+            this.plugin.settings.bodyTokenSegmenterEnabled = v;
+            await this.plugin.saveSettings();
+            if (this.plugin.settings.bodyTokenEnabled) {
+              await this.plugin.rebuildBodyIndex();
+            }
+          }),
+      );
+
     new Setting(containerEl).setName("Body-token weight").addText((t) =>
       t
         .setValue(String(this.plugin.settings.bodyTokenWeight))

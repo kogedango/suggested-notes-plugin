@@ -22,11 +22,21 @@ describe("tokenize", () => {
     expect(out.has("quick")).toBe(true);
   });
 
-  it("extracts katakana of length >= 3", () => {
-    const out = tokenize("プラグイン ノート ア");
+  it("extracts katakana of length >= 2", () => {
+    const out = tokenize("プラグイン ノート バグ ア");
     expect(out.has("プラグイン")).toBe(true);
     expect(out.has("ノート")).toBe(true);
+    expect(out.has("バグ")).toBe(true);
     expect(out.has("ア")).toBe(false);
+  });
+
+  it("normalizes trailing prolonged marks so spelling variants match", () => {
+    expect(tokenize("サーバー").has("サーバ")).toBe(true);
+    expect(tokenize("サーバ").has("サーバ")).toBe(true);
+    expect(tokenize("ユーザー").has("ユーザ")).toBe(true);
+    // ...but never down to a single kana.
+    expect(tokenize("キー").has("キー")).toBe(true);
+    expect(tokenize("キー").has("キ")).toBe(false);
   });
 
   it("extracts kanji of length >= 2", () => {
@@ -34,6 +44,33 @@ describe("tokenize", () => {
     expect(out.has("関連")).toBe(true);
     expect(out.has("機能")).toBe(true);
     expect(out.has("一")).toBe(false);
+  });
+
+  it("emits kanji bigrams alongside the full run", () => {
+    const out = tokenize("機械学習");
+    expect(out.has("機械学習")).toBe(true);
+    expect(out.has("機械")).toBe(true);
+    expect(out.has("学習")).toBe(true);
+    // so a note saying just 機械 still shares a token with this one
+    expect(tokenize("機械").has("機械")).toBe(true);
+  });
+
+  it("segmenter mode picks up okurigana-mixed and hiragana words", () => {
+    const text = "会議で打ち合わせの記録をふりかえりとして書いた";
+    const seg = tokenize(text, true);
+    expect(seg.has("打ち合わせ")).toBe(true);
+    expect(seg.has("ふりかえり")).toBe(true);
+    // the default regex pass cannot see either word
+    const plain = tokenize(text);
+    expect(plain.has("打ち合わせ")).toBe(false);
+    expect(plain.has("ふりかえり")).toBe(false);
+  });
+
+  it("segmenter mode drops hiragana function words", () => {
+    const seg = tokenize("日記にひらめきを書く。サーバーの監視について", true);
+    expect(seg.has("ひらめき")).toBe(true);
+    expect(seg.has("について")).toBe(false);
+    expect(seg.has("の")).toBe(false);
   });
 
   it("strips frontmatter", () => {

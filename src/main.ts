@@ -1,4 +1,5 @@
 import {
+  Debouncer,
   Notice,
   Plugin,
   TAbstractFile,
@@ -23,10 +24,10 @@ export default class RelatedNotesPlugin extends Plugin {
   private body!: BodyTokenIndex;
   private scoring!: ScoringEngine;
   private ready = false;
-  private scheduleRefresh!: () => void;
+  private scheduleRefresh!: Debouncer<[], void>;
   private bodyIndexBuilding = false;
   private bodyRebuildPending = false;
-  private scheduleBodyRebuild!: () => void;
+  private scheduleBodyRebuild!: Debouncer<[], void>;
   private lastRefreshedPath: string | null = null;
   private refreshVersion = 0;
 
@@ -111,7 +112,7 @@ export default class RelatedNotesPlugin extends Plugin {
       this.app.metadataCache.on("changed", (file) => {
         if (!(file instanceof TFile)) return;
         if (file.extension !== "md") return;
-        this.onFileChanged(file);
+        this.reindexFile(file, true);
       }),
     );
 
@@ -125,7 +126,7 @@ export default class RelatedNotesPlugin extends Plugin {
       this.app.metadataCache.on("resolve", (file) => {
         if (!(file instanceof TFile)) return;
         if (file.extension !== "md") return;
-        this.onFileResolved(file);
+        this.reindexFile(file, false);
       }),
     );
 
@@ -155,7 +156,11 @@ export default class RelatedNotesPlugin extends Plugin {
     );
   }
 
-  onunload(): void {}
+  onunload(): void {
+    // Drop any pending trailing debounces so they can't fire after unload.
+    this.scheduleRefresh.cancel();
+    this.scheduleBodyRebuild.cancel();
+  }
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign(
@@ -169,9 +174,11 @@ export default class RelatedNotesPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
+  // Settings text fields call this per keystroke; route through the debounced
+  // refresh so typing "20" doesn't run a full scoring pass on the "2".
   invalidateAll(): void {
     this.scoring.markDirty();
-    void this.refresh();
+    this.scheduleRefresh();
   }
 
   // Rebuilds the body-token corpus. Triggered on enable, on startup, by the
@@ -193,7 +200,10 @@ export default class RelatedNotesPlugin extends Plugin {
     try {
       do {
         this.bodyRebuildPending = false;
-        await this.body.rebuildAll(this.settings.bodyTokenTopN);
+        await this.body.rebuildAll(
+          this.settings.bodyTokenTopN,
+          this.settings.bodyTokenSegmenterEnabled,
+        );
       } while (this.bodyRebuildPending);
     } finally {
       this.bodyIndexBuilding = false;
@@ -226,7 +236,11 @@ export default class RelatedNotesPlugin extends Plugin {
     }
   }
 
-  private onFileChanged(file: TFile): void {
+  // Shared by the "changed" and "resolve" handlers: re-snapshot the file and
+  // refresh. Only "changed" implies the body text moved — "resolve" is link
+  // resolution catching up, and body tokens don't depend on resolvedLinks, so
+  // it skips scheduling the (expensive) corpus rebuild.
+  private reindexFile(file: TFile, bodyMayHaveChanged: boolean): void {
     if (!this.ready) return;
     const { prev, next } = this.store.update(file);
     if (prev) this.inverted.remove(prev);
@@ -235,28 +249,21 @@ export default class RelatedNotesPlugin extends Plugin {
     // Body corpus is rebuilt coarsely, not per edit. The active note's own
     // body tokens are read fresh at query time, so the edited note still
     // reflects its latest text immediately when it's the one being viewed.
-    if (this.settings.bodyTokenEnabled) this.scheduleBodyRebuild();
+    if (bodyMayHaveChanged && this.settings.bodyTokenEnabled) {
+      this.scheduleBodyRebuild();
+    }
     this.scheduleRefresh();
   }
 
-  // Re-snapshot when link resolution catches up. Body tokens don't depend on
-  // resolvedLinks so we skip the (expensive) async re-tokenize here.
-  private onFileResolved(file: TFile): void {
-    if (!this.ready) return;
-    const { prev, next } = this.store.update(file);
-    if (prev) this.inverted.remove(prev);
-    this.inverted.add(next);
-    this.scoring.markDirty();
-    this.scheduleRefresh();
+  private relatedViews(): RelatedNotesView[] {
+    return this.app.workspace
+      .getLeavesOfType(VIEW_TYPE_RELATED_NOTES)
+      .map((l) => l.view)
+      .filter((v): v is RelatedNotesView => v instanceof RelatedNotesView);
   }
 
   private setLoadingOnAllViews(): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(
-      VIEW_TYPE_RELATED_NOTES,
-    )) {
-      const view = leaf.view as RelatedNotesView;
-      view.setLoading();
-    }
+    for (const view of this.relatedViews()) view.setLoading();
   }
 
   private async refresh(): Promise<void> {
@@ -267,24 +274,28 @@ export default class RelatedNotesPlugin extends Plugin {
     // newer one with stale results.
     const version = ++this.refreshVersion;
 
-    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_RELATED_NOTES);
-    if (leaves.length === 0) return;
+    const views = this.relatedViews();
+    if (views.length === 0) return;
 
     const active = this.app.workspace.getActiveFile();
     if (!active || active.extension !== "md") {
       this.lastRefreshedPath = null;
-      for (const l of leaves) (l.view as RelatedNotesView).setNoActive();
+      for (const v of views) v.setNoActive();
       return;
     }
     if (!this.ready) {
-      for (const l of leaves) (l.view as RelatedNotesView).setLoading();
+      for (const v of views) v.setLoading();
       return;
     }
 
     // The active note's body tokens are read fresh on demand.
     const activeBodyTokens =
       this.settings.bodyTokenEnabled && this.body.isBuilt()
-        ? await this.body.computeSalient(active, this.settings.bodyTokenTopN)
+        ? await this.body.computeSalient(
+            active,
+            this.settings.bodyTokenTopN,
+            this.settings.bodyTokenSegmenterEnabled,
+          )
         : EMPTY_TOKENS;
     // A newer refresh started while we were reading — let it render instead.
     if (version !== this.refreshVersion) return;
@@ -303,12 +314,7 @@ export default class RelatedNotesPlugin extends Plugin {
       tagPool,
       this.settings,
     );
-    for (const l of leaves)
-      (l.view as RelatedNotesView).setResults(
-        active.path,
-        results,
-        suggestedTags,
-      );
+    for (const v of views) v.setResults(active.path, results, suggestedTags);
   }
 
   async addTagToActive(activePath: string, tag: string): Promise<void> {

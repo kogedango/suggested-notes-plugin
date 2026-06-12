@@ -34,7 +34,9 @@ Defaults: resolved links only (unresolved `[[wikilinks]]` ignored); aliases not 
 
 ### Body-token matching (optional, OFF by default)
 
-An opt-in enrichment that surfaces notes sharing rare vocabulary even without shared tags/links. It tokenizes note bodies (NFKC-normalized; CJK + ASCII, stopword- and markdown-stripped), keeps the top-N salient tokens per note by IDF, and adds `bodyTokenWeight × tokenIDF` per shared salient token to the score.
+An opt-in enrichment that surfaces notes sharing rare vocabulary even without shared tags/links. It tokenizes note bodies (NFKC-normalized; CJK + ASCII, stopword- and markdown-stripped; kanji runs also emit bigrams, trailing katakana prolonged marks are normalized), keeps the top-N salient tokens per note by IDF, and adds `bodyTokenWeight × tokenIDF` per shared salient token to the score.
+
+Japanese segmentation via `tiny-segmenter` (`bodyTokenSegmenterEnabled`, experimental, OFF by default) is **sanctioned** despite the "no AI" constraint: it is a ~25KB offline, deterministic, dictionary-free tokenizer bundled into the plugin — no network, no background process. The corpus and the query must always be tokenized with the same segmenter flag; toggling the setting triggers a corpus rebuild.
 
 Architecture is a **corpus/query split** — this is what keeps full-text within the constraints, so preserve it:
 
@@ -44,4 +46,7 @@ Architecture is a **corpus/query split** — this is what keeps full-text within
 
 ## Commands
 
-No build tooling exists yet. When scaffolding from `obsidian-sample-plugin`, expected commands will be `npm run dev` (esbuild watch) and `npm run build`. Update this section once `package.json` lands.
+- `npm run dev` — esbuild watch build
+- `npm run build` — typecheck (`tsc -noEmit`) + production esbuild bundle to `main.js`
+- `npm run typecheck` — typecheck only
+- `npm test` / `npm run test:watch` — vitest (pure-function tests under `src/util` and `src/scoring`)

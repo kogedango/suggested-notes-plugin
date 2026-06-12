@@ -1,6 +1,9 @@
 import { App, TFile, getAllTags } from "obsidian";
 import type { FileSnapshot } from "../types";
 
+// Backlinks are NOT computed here: a full resolvedLinks scan per file would
+// make bulk rebuilds O(N²). They are maintained incrementally by the store
+// (recomputeBacklinks on rebuild, outlink-diffing on update).
 export function buildSnapshot(app: App, file: TFile): FileSnapshot {
   const cache = app.metadataCache.getFileCache(file);
   const tags = new Set<string>();
@@ -12,25 +15,31 @@ export function buildSnapshot(app: App, file: TFile): FileSnapshot {
   const resolved = app.metadataCache.resolvedLinks[file.path] ?? {};
   const outlinks = new Set<string>(Object.keys(resolved));
 
-  const backlinks = new Set<string>();
-  for (const src of Object.keys(app.metadataCache.resolvedLinks)) {
-    if (src === file.path) continue;
-    const targets = app.metadataCache.resolvedLinks[src];
-    if (targets && file.path in targets) backlinks.add(src);
-  }
-
   const folder = file.parent?.path ?? "";
 
   return {
     path: file.path,
     tags,
     outlinks,
-    backlinks,
+    backlinks: new Set<string>(),
     ctime: file.stat.ctime,
     mtime: file.stat.mtime,
     outlinkCount: outlinks.size,
     folder,
   };
+}
+
+// One full scan of resolvedLinks — only paid for genuinely new files, where
+// no incrementally-maintained backlink set exists yet.
+function scanBacklinks(app: App, path: string): Set<string> {
+  const backlinks = new Set<string>();
+  const resolved = app.metadataCache.resolvedLinks;
+  for (const src of Object.keys(resolved)) {
+    if (src === path) continue;
+    const targets = resolved[src];
+    if (targets && path in targets) backlinks.add(src);
+  }
+  return backlinks;
 }
 
 export function normalizeTag(t: string): string {
@@ -66,8 +75,11 @@ export class MetadataStore {
     const prev = this.snapshots.get(file.path);
     const next = buildSnapshot(this.app, file);
 
-    // Preserve existing backlinks; outlink-changes drive the diff below.
-    if (prev) next.backlinks = prev.backlinks;
+    // Preserve existing backlinks (outlink-changes drive the diff below);
+    // only a genuinely new file pays the full resolvedLinks scan.
+    next.backlinks = prev
+      ? prev.backlinks
+      : scanBacklinks(this.app, file.path);
 
     const prevOut = prev?.outlinks ?? EMPTY_SET;
     for (const target of prevOut) {
