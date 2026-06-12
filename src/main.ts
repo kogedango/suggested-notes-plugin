@@ -17,6 +17,8 @@ import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
 const EMPTY_TOKENS: Set<string> = new Set();
 
+const BODY_REBUILD_DEBOUNCE_MS = 60_000;
+
 export default class RelatedNotesPlugin extends Plugin {
   settings!: PluginSettings;
   private store!: MetadataStore;
@@ -27,6 +29,7 @@ export default class RelatedNotesPlugin extends Plugin {
   private scheduleRefresh!: Debouncer<[], void>;
   private bodyIndexBuilding = false;
   private bodyRebuildPending = false;
+  private bodyRebuildNotify = false;
   private scheduleBodyRebuild!: Debouncer<[], void>;
   private lastRefreshedPath: string | null = null;
   private refreshVersion = 0;
@@ -75,12 +78,16 @@ export default class RelatedNotesPlugin extends Plugin {
 
     this.scheduleRefresh = debounce(() => void this.refresh(), 300, true);
 
-    // Auto corpus rebuild: fire once after edits settle. Event-driven (a
-    // trailing debounce), not a polling loop — so it stays within the
-    // "no background process" constraint. Manual rebuild is also a command.
+    // Auto corpus rebuild: a lazy backstop, not the primary path. Fires only
+    // after edits have settled for a full minute — re-tokenizing the whole
+    // vault per 3s typing pause was significant CPU (especially with the
+    // segmenter on), for a signal that mostly concerns *other* notes. When
+    // the corpus needs to be current right now, the settings-tab rebuild
+    // button / rebuild command do it on demand. Event-driven (a trailing
+    // debounce), not a polling loop — so "no background process" holds.
     this.scheduleBodyRebuild = debounce(
       () => void this.rebuildBodyIndex(),
-      3000,
+      BODY_REBUILD_DEBOUNCE_MS,
       true,
     );
 
@@ -136,7 +143,8 @@ export default class RelatedNotesPlugin extends Plugin {
         if (!this.ready) return;
         const snap = this.store.remove(af.path);
         if (snap) this.inverted.remove(snap);
-        if (this.settings.bodyTokenEnabled) this.scheduleBodyRebuild();
+        // No body re-read needed: text didn't change, just drop the entry.
+        this.body.remove(af.path);
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -149,7 +157,8 @@ export default class RelatedNotesPlugin extends Plugin {
         const { prev, next } = this.store.rename(oldPath, af);
         if (prev) this.inverted.remove({ ...prev, path: oldPath });
         this.inverted.add(next);
-        if (this.settings.bodyTokenEnabled) this.scheduleBodyRebuild();
+        // No body re-read needed: text didn't change, just re-key the entry.
+        this.body.rename(oldPath, af.path);
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -182,16 +191,21 @@ export default class RelatedNotesPlugin extends Plugin {
   }
 
   // Rebuilds the body-token corpus. Triggered on enable, on startup, by the
-  // manual command, and by the debounced post-edit timer. If a rebuild is
-  // requested while one is running, we run once more afterwards rather than
-  // dropping it — so the corpus always ends up reflecting the latest edits.
-  async rebuildBodyIndex(): Promise<void> {
+  // manual command / settings-tab button, and by the lazy post-edit timer.
+  // If a rebuild is requested while one is running, we run once more
+  // afterwards rather than dropping it — so the corpus always ends up
+  // reflecting the latest edits. `notify` posts a Notice when this (or, if a
+  // build is already running, that build's final pass) has finished.
+  async rebuildBodyIndex(notify = false): Promise<void> {
+    // Whatever queued this lazy timer, the work is happening now.
+    this.scheduleBodyRebuild.cancel();
     if (!this.ready) return;
     if (!this.settings.bodyTokenEnabled) {
       this.body.clear();
       void this.refresh();
       return;
     }
+    if (notify) this.bodyRebuildNotify = true;
     if (this.bodyIndexBuilding) {
       this.bodyRebuildPending = true;
       return;
@@ -207,6 +221,10 @@ export default class RelatedNotesPlugin extends Plugin {
       } while (this.bodyRebuildPending);
     } finally {
       this.bodyIndexBuilding = false;
+    }
+    if (this.bodyRebuildNotify) {
+      this.bodyRebuildNotify = false;
+      new Notice("Body-token index rebuilt.");
     }
     void this.refresh();
   }
@@ -246,10 +264,19 @@ export default class RelatedNotesPlugin extends Plugin {
     if (prev) this.inverted.remove(prev);
     this.inverted.add(next);
     this.scoring.markDirty();
-    // Body corpus is rebuilt coarsely, not per edit. The active note's own
-    // body tokens are read fresh at query time, so the edited note still
-    // reflects its latest text immediately when it's the one being viewed.
     if (bodyMayHaveChanged && this.settings.bodyTokenEnabled) {
+      // Two corpus paths: the edited note's salient set is touched up right
+      // away (cheap, df untouched) so fresh text is discoverable from other
+      // notes immediately; the full rebuild stays a lazy backstop that
+      // refreshes df. The active note's own query tokens are read fresh at
+      // refresh time regardless.
+      void this.body
+        .refreshNote(
+          file,
+          this.settings.bodyTokenTopN,
+          this.settings.bodyTokenSegmenterEnabled,
+        )
+        .then(() => this.scheduleRefresh());
       this.scheduleBodyRebuild();
     }
     this.scheduleRefresh();

@@ -79,7 +79,6 @@ export class RelatedNotesView extends ItemView {
     container.empty();
     container.addClass("suggested-notes-view");
 
-
     switch (this.state.kind) {
       case "loading":
         container.createEl("div", {

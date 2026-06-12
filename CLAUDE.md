@@ -26,7 +26,8 @@ Weighted sum of shared signals (default weights: outlinks 8, tags 5, backlinks 4
 - **Outlink-count penalty**: divide candidate score by `log(1 + outlinkCount)` to suppress MOC/index dominance.
 - **Tag IDF**: weight each shared tag by `log(totalNotes / notesWithTag)`.
 - **Link IDF**: same for shared outlinks.
-- **Temporal-DAG filter** (optional setting `onlyOlderNotes`): exclude candidates with `ctime > activeNote.ctime`.
+
+Temporal filtering (an `onlyOlderNotes` setting excluding candidates newer than the active note) was considered and **rejected** — do not re-propose it. The owner's workflow allows revising old notes, so linking "forward in time" from an old note to a newer one is legitimate; a chronology filter only makes sense if old notes are immutable.
 
 Displayed scores are **per-query normalized** (top candidate = 100); raw scores stay internal.
 
@@ -40,9 +41,9 @@ Japanese segmentation via `tiny-segmenter` (`bodyTokenSegmenterEnabled`, experim
 
 Architecture is a **corpus/query split** — this is what keeps full-text within the constraints, so preserve it:
 
-- **Corpus** (all notes: `df`, per-note `salient`, inverted index) is rebuilt *coarsely* — on enable, on startup, on the manual `Rebuild body-token index` command, and via a debounced pass after edits settle. It is **not** maintained per keystroke. Do not reintroduce incremental per-edit corpus updates: that path caused a df-corruption race and unbounded per-note token retention. The debounced rebuild is event-driven (a trailing debounce), not a polling loop — so it stays within "no always-on background process".
+- **Corpus** (all notes: `df`, per-note `salient`, inverted index) is rebuilt *coarsely* — on enable, on startup, on demand (the settings-tab rebuild button / `Rebuild body-token index` command), and via a **lazy** debounced backstop (~60s after edits settle; manual refresh is the "I need it now" path, so keep the auto rebuild infrequent). The hard boundary is **`df` is never maintained incrementally** — that path caused a df-corruption race and unbounded per-note token retention; df only changes in a full rebuild. Per-note `salient`/`inverted` updates scoped to the affected note ARE sanctioned: an edited note's salient set is re-ranked against the frozen df when its edit settles (Obsidian's autosave → `metadataCache.changed`, ~2s after typing stops), and rename/delete just re-key entries without a body read. The debounced rebuild is event-driven (a trailing debounce), not a polling loop — so it stays within "no always-on background process".
 - **Query** (the active note's salient tokens) is computed **fresh on demand** from a single `cachedRead` on each active-note change. This is the only body read in the hot path; it is naturally latest-wins, so the active note always reflects its current text.
-- Accepted trade-off: a recently-edited *other* note's body signal lags until the next corpus rebuild. This is intentional — match engineering effort to a marginal enrichment signal; don't chase per-edit corpus freshness.
+- Accepted trade-off: `df` (and therefore IDF, and salience of brand-new vocabulary) lags until the next coarse rebuild. This is intentional — IDF only needs to be statistically right, and vocabulary that is new to the vault cannot produce a shared signal before a rebuild anyway (matching requires df ≥ 2).
 
 ## Commands
 

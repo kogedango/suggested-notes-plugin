@@ -81,6 +81,64 @@ export class BodyTokenIndex {
     return rankSalient(tokenize(body, segment), topN, this.df, this.totalNotes);
   }
 
+  // --- Cheap corpus maintenance ---
+
+  // Single-note touch-up after an edit settles (Obsidian autosaves ~2s after
+  // typing stops, which fires metadataCache "changed"): re-rank just this
+  // note's salient set against the *current* df, so the note you just wrote
+  // becomes discoverable from other notes immediately. `df` is NOT updated —
+  // incremental df maintenance is the corruption-prone path this design
+  // removed; brand-new vocabulary enters df at the next coarse rebuild (it
+  // couldn't match anything before then anyway, since matching needs df >= 2).
+  async refreshNote(
+    file: TFile,
+    topN: number,
+    segment: boolean,
+  ): Promise<void> {
+    if (!this.built) return;
+    const tokens = tokenize(await this.app.vault.cachedRead(file), segment);
+    const next = rankSalient(tokens, topN, this.df, this.totalNotes);
+    this.remove(file.path);
+    this.salient.set(file.path, next);
+    for (const t of next) {
+      let inv = this.inverted.get(t);
+      if (!inv) {
+        inv = new Set();
+        this.inverted.set(t, inv);
+      }
+      inv.add(file.path);
+    }
+  }
+
+  // Rename/delete don't change note text, so a full rebuild is wasted I/O —
+  // just re-key the salient/inverted entries. `df` is deliberately left
+  // untouched (slightly stale until the next coarse rebuild): incremental df
+  // maintenance is the path that caused the corruption race this design
+  // removed, and IDF only needs to be statistically right.
+
+  rename(oldPath: string, newPath: string): void {
+    const sal = this.salient.get(oldPath);
+    if (!sal) return;
+    this.salient.delete(oldPath);
+    this.salient.set(newPath, sal);
+    for (const t of sal) {
+      const inv = this.inverted.get(t);
+      if (inv?.delete(oldPath)) inv.add(newPath);
+    }
+  }
+
+  remove(path: string): void {
+    const sal = this.salient.get(path);
+    if (!sal) return;
+    this.salient.delete(path);
+    for (const t of sal) {
+      const inv = this.inverted.get(t);
+      if (!inv) continue;
+      inv.delete(path);
+      if (inv.size === 0) this.inverted.delete(t);
+    }
+  }
+
   // --- Corpus rebuild (coarse) ---
 
   async rebuildAll(topN: number, segment: boolean): Promise<void> {

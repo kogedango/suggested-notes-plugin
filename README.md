@@ -58,12 +58,13 @@ Notes in the same folder are often related for boring reasons (you put them ther
 When enabled, it reads every `.md` once to build a whole-vault index (~10–20s for 5,000 notes, async, doesn't block the UI). After that:
 
 - The **active note is always re-read live**, so it reflects your latest edits immediately.
-- The whole-vault index **rebuilds coarsely** — automatically after edits settle, or on demand via the **Rebuild body-token index** command — not on every keystroke. A recently-edited *other* note may not surface by body similarity until the next rebuild.
+- An **edited note's index entry updates as soon as the edit settles** (~2s, on Obsidian's autosave), so what you just wrote is immediately discoverable from other notes.
+- The whole-vault statistics (token rarity) **rebuild lazily** — automatically ~1 minute after edits settle, or immediately via the **Rebuild** button in settings / the **Rebuild body-token index** command — never on every keystroke. Until then, vocabulary that is brand-new to the vault isn't weighted yet (it couldn't match anything before a second note uses it anyway).
 
 ## Features
 
 - Sidebar listing related notes for the active file
-- Per-row preview on hover (~600ms dwell)
+- Hover a row for the full score breakdown; Cmd/Ctrl-hover for the note preview
 - Copy-as-markdown-link button on each row
 - Suggested tags — tags that frequently appear in the result set but not on the active note. Click to add to frontmatter
 - Exclusions: folders / tags / outlinks ([details](#exclusion-semantics))
