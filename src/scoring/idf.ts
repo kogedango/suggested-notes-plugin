@@ -1,5 +1,5 @@
 import type { InvertedIndex } from "../cache/inverted";
-import type { MetadataStore } from "../cache/metadata";
+import type { SnapshotReader } from "../cache/store";
 
 export class IDFTables {
   private dirty = true;
@@ -8,7 +8,7 @@ export class IDFTables {
   private linkIDF = new Map<string, number>();
 
   constructor(
-    private store: MetadataStore,
+    private store: SnapshotReader,
     private inverted: InvertedIndex,
   ) {}
 

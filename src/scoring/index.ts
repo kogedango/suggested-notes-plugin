@@ -1,6 +1,6 @@
 import type { BodyTokenIndex } from "../cache/bodyTokens";
 import type { InvertedIndex } from "../cache/inverted";
-import type { MetadataStore } from "../cache/metadata";
+import type { SnapshotReader } from "../cache/store";
 import type {
   FileSnapshot,
   PluginSettings,
@@ -24,7 +24,7 @@ export class ScoringEngine {
   private idf: IDFTables;
 
   constructor(
-    private store: MetadataStore,
+    private store: SnapshotReader,
     private inverted: InvertedIndex,
     private body: BodyTokenIndex,
   ) {
