@@ -9,6 +9,10 @@ export interface PluginSettings {
   bodyTokenEnabled: boolean;
   bodyTokenWeight: number;
   bodyTokenTopN: number;
+  // Experimental: TinySegmenter-based Japanese word segmentation, picking up
+  // okurigana-mixed (打ち合わせ) and hiragana-only (ひらめき) words the
+  // script-run tokenizer cannot see. Offline, deterministic, opt-in.
+  bodyTokenSegmenterEnabled: boolean;
 
   showScores: boolean;
   showSharedReasons: boolean;
@@ -30,6 +34,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   bodyTokenEnabled: false,
   bodyTokenWeight: 1.5,
   bodyTokenTopN: 40,
+  bodyTokenSegmenterEnabled: false,
 
   showScores: true,
   showSharedReasons: true,

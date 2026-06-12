@@ -48,19 +48,23 @@ Notes in the same folder are often related for boring reasons (you put them ther
 **Optional, off by default.** Picks up notes that share rare vocabulary even without explicit tags or links. This is the only feature that reads note bodies; with it off, the plugin is metadata-only.
 
 - Strips frontmatter, code blocks, wikilinks, and hashtags from the body
-- NFKC-normalizes (so full-width / half-width variants match), then extracts English, katakana (3+ chars), and kanji (2+ chars) by regex — no morphological analyzer
+- NFKC-normalizes (so full-width / half-width variants match), then extracts English, katakana (2+ chars), and kanji (2+ chars) by regex
+- Kanji runs also emit overlapping bigrams (機械学習 → 機械 / 械学 / 学習), so compounds match notes that use only their parts
+- Trailing prolonged marks are normalized (サーバー and サーバ match)
+- Optional **Japanese word segmentation (experimental)**: runs TinySegmenter (offline, no dictionary) to also catch okurigana-mixed words (打ち合わせ) and hiragana words (ひらめき) the regex cannot see
 - Retains top-N salient tokens per note by IDF (default 40)
 - Tokens appearing in >40% of the vault are auto-excluded as stopwords
 
 When enabled, it reads every `.md` once to build a whole-vault index (~10–20s for 5,000 notes, async, doesn't block the UI). After that:
 
 - The **active note is always re-read live**, so it reflects your latest edits immediately.
-- The whole-vault index **rebuilds coarsely** — automatically after edits settle, or on demand via the **Rebuild body-token index** command — not on every keystroke. A recently-edited *other* note may not surface by body similarity until the next rebuild.
+- An **edited note's index entry updates as soon as the edit settles** (~2s, on Obsidian's autosave), so what you just wrote is immediately discoverable from other notes.
+- The whole-vault statistics (token rarity) **rebuild lazily** — automatically ~1 minute after edits settle, or immediately via the **Rebuild** button in settings / the **Rebuild body-token index** command — never on every keystroke. Until then, vocabulary that is brand-new to the vault isn't weighted yet (it couldn't match anything before a second note uses it anyway).
 
 ## Features
 
 - Sidebar listing related notes for the active file
-- Per-row preview on hover (~600ms dwell)
+- Hover a row for the full score breakdown; Cmd/Ctrl-hover for the note preview
 - Copy-as-markdown-link button on each row
 - Suggested tags — tags that frequently appear in the result set but not on the active note. Click to add to frontmatter
 - Exclusions: folders / tags / outlinks ([details](#exclusion-semantics))
@@ -76,6 +80,7 @@ When enabled, it reads every `.md` once to build a whole-vault index (~10–20s 
 | Enable body-token matching | off | Optional. On reads all note bodies; off uses tags/links only |
 | Body-token weight | 1.5 | Keep low (1–2) |
 | Salient tokens per note | 40 | Top-N by IDF retained per note |
+| Japanese word segmentation | off | Experimental. TinySegmenter; catches 打ち合わせ-style and hiragana words |
 | Show scores | on | |
 | Show shared reasons | on | What each match shares |
 | Hide already-linked | off | |

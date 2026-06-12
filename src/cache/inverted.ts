@@ -1,5 +1,5 @@
 import type { FileSnapshot } from "../types";
-import type { MetadataStore } from "./metadata";
+import type { SnapshotReader } from "./store";
 
 export class InvertedIndex {
   // tag -> files containing it
@@ -7,7 +7,7 @@ export class InvertedIndex {
   // outlink target path -> files linking to it
   private linkIndex = new Map<string, Set<string>>();
 
-  constructor(private store: MetadataStore) {}
+  constructor(private store: SnapshotReader) {}
 
   rebuild(): void {
     this.tagIndex.clear();

@@ -5,9 +5,13 @@ import { displayName } from "../util/path";
 
 export const VIEW_TYPE_RELATED_NOTES = "suggested-notes-view";
 
-const HOVER_DELAY_MS = 600;
+const REASONS_TIP_DELAY_MS = 350;
 
 export class RelatedNotesView extends ItemView {
+  private reasonsTipEl: HTMLElement | null = null;
+  private reasonsTipTimer: number | undefined;
+  private lastModifier = false;
+
   private state:
     | { kind: "loading" }
     | { kind: "no-active" }
@@ -38,10 +42,32 @@ export class RelatedNotesView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    // Modifier state can change without the mouse moving; track it globally
+    // so the info tooltip yields to the modifier-gated page preview the
+    // moment Cmd/Ctrl goes down (mouse listeners alone would miss it).
+    this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") {
+        this.lastModifier = true;
+        this.hideReasonsTip();
+      }
+    });
+    this.registerDomEvent(document, "keyup", (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") this.lastModifier = false;
+    });
+    // The tooltip is position:fixed and doesn't follow its row when the
+    // list scrolls — drop it instead of letting it float detached.
+    this.registerDomEvent(
+      this.containerEl,
+      "scroll",
+      () => this.hideReasonsTip(),
+      true,
+    );
     this.render();
   }
 
-  async onClose(): Promise<void> {}
+  async onClose(): Promise<void> {
+    this.hideReasonsTip();
+  }
 
   setLoading(): void {
     this.state = { kind: "loading" };
@@ -66,10 +92,12 @@ export class RelatedNotesView extends ItemView {
   }
 
   private render(): void {
+    // Rows (and their hover handlers) are about to be discarded; drop any
+    // breakdown tooltip we appended to document.body so it doesn't orphan.
+    this.hideReasonsTip();
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("suggested-notes-view");
-
 
     switch (this.state.kind) {
       case "loading":
@@ -126,12 +154,15 @@ export class RelatedNotesView extends ItemView {
 
     const self = item.createEl("div", {
       cls: "tree-item-self is-clickable suggested-notes-self",
-      attr: { "aria-label": c.path },
     });
     self.addEventListener("click", (e) => {
       this.openNote(c.path, e.ctrlKey || e.metaKey);
     });
-    this.attachDelayedHover(self, activePath, c.path);
+    this.attachHoverPreview(self, activePath, c.path);
+    // One plain-hover tooltip per row: note title/path + the full score
+    // breakdown. Replaces the native aria-label title tooltip (which doubled up
+    // with the breakdown popover) so plain hover shows a single, complete card.
+    this.attachInfoTooltip(self, c);
 
     if (settings.showScores) {
       self.createEl("span", {
@@ -158,37 +189,71 @@ export class RelatedNotesView extends ItemView {
     this.attachCopyButton(self, activePath, c.path);
   }
 
-  // Delay-based preview: only fire after the mouse rests on the row for
-  // HOVER_DELAY_MS. Avoids "preview pops every time my mouse passes through"
-  // while still working without a modifier key.
-  private attachDelayedHover(
+  // Standard link-hover wiring: emit "hover-link" with the mouse event and let
+  // Obsidian's Page Preview own the rest. With defaultMod:true on our hover-link
+  // source, it only previews while Cmd/Ctrl is held (and applies its own delay).
+  private attachHoverPreview(
     self: HTMLElement,
     activePath: string,
     targetPath: string,
   ): void {
-    let hoverTimer: number | undefined;
-    let lastEvent: MouseEvent | undefined;
-    self.addEventListener("mouseenter", (e) => {
-      lastEvent = e;
-      window.clearTimeout(hoverTimer);
-      hoverTimer = window.setTimeout(() => {
-        this.app.workspace.trigger("hover-link", {
-          event: lastEvent,
-          source: VIEW_TYPE_RELATED_NOTES,
-          hoverParent: this,
-          targetEl: self,
-          linktext: targetPath,
-          sourcePath: activePath,
-        });
-      }, HOVER_DELAY_MS);
+    self.addEventListener("mouseover", (event) => {
+      this.app.workspace.trigger("hover-link", {
+        event,
+        source: VIEW_TYPE_RELATED_NOTES,
+        hoverParent: this,
+        targetEl: self,
+        linktext: targetPath,
+        sourcePath: activePath,
+      });
     });
-    self.addEventListener("mousemove", (e) => {
-      lastEvent = e;
+  }
+
+  // Hover a row to get the note's title/path plus the full score breakdown,
+  // grouped by signal (tags / links / backlinks / body tokens). Suppressed
+  // while Cmd/Ctrl is held so it doesn't fight the modifier body preview.
+  private attachInfoTooltip(el: HTMLElement, c: ScoredCandidate): void {
+    el.addEventListener("mousemove", (e) => {
+      this.lastModifier = e.metaKey || e.ctrlKey;
     });
-    self.addEventListener("mouseleave", () => {
-      window.clearTimeout(hoverTimer);
-      hoverTimer = undefined;
+    el.addEventListener("mouseenter", (e) => {
+      this.lastModifier = e.metaKey || e.ctrlKey;
+      window.clearTimeout(this.reasonsTipTimer);
+      this.reasonsTipTimer = window.setTimeout(() => {
+        if (this.lastModifier) return;
+        this.showInfoTip(el, c);
+      }, REASONS_TIP_DELAY_MS);
     });
+    el.addEventListener("mouseleave", () => {
+      this.hideReasonsTip();
+    });
+  }
+
+  private showInfoTip(anchor: HTMLElement, c: ScoredCandidate): void {
+    this.hideReasonsTip();
+    const tip = buildInfoTip(c, this.plugin.settings.showSharedReasons);
+    document.body.appendChild(tip);
+    this.reasonsTipEl = tip;
+
+    // Prefer below-left of the line; clamp into the viewport, flip above when
+    // there isn't room beneath.
+    const r = anchor.getBoundingClientRect();
+    tip.style.left = `${r.left}px`;
+    tip.style.top = `${r.bottom + 4}px`;
+    const t = tip.getBoundingClientRect();
+    if (t.right > window.innerWidth - 8) {
+      tip.style.left = `${Math.max(8, window.innerWidth - 8 - t.width)}px`;
+    }
+    if (t.bottom > window.innerHeight - 8) {
+      tip.style.top = `${Math.max(8, r.top - t.height - 4)}px`;
+    }
+  }
+
+  private hideReasonsTip(): void {
+    window.clearTimeout(this.reasonsTipTimer);
+    this.reasonsTipTimer = undefined;
+    this.reasonsTipEl?.remove();
+    this.reasonsTipEl = null;
   }
 
   private attachCopyButton(
@@ -282,4 +347,77 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
     );
   }
   el.setText(parts.length ? parts.join(" · ") : "");
+}
+
+// The full hover card: note title (+ folder) followed by the untruncated score
+// breakdown — every shared signal, grouped by type.
+function buildInfoTip(
+  c: ScoredCandidate,
+  showReasons: boolean,
+): HTMLElement {
+  const tip = createDiv({ cls: "suggested-notes-reasons-tip" });
+
+  const header = tip.createDiv({ cls: "suggested-notes-reasons-tip-header" });
+  header.createDiv({
+    cls: "suggested-notes-reasons-tip-name",
+    text: displayName(c.path),
+  });
+  const slash = c.path.lastIndexOf("/");
+  if (slash > 0) {
+    header.createDiv({
+      cls: "suggested-notes-reasons-tip-path",
+      text: c.path.slice(0, slash),
+    });
+  }
+
+  // Signal labels are icons, reusing Obsidian's own outgoing-/back-link glyphs
+  // so they read the same as its core panels. aria-label keeps meaning clear.
+  const sections: { icon: string; label: string; values: string[] }[] = [];
+  if (showReasons && c.reasons.sharedTags.length) {
+    sections.push({
+      icon: "tag",
+      label: "Shared tags",
+      values: c.reasons.sharedTags.map((t) => `#${t}`),
+    });
+  }
+  if (showReasons && c.reasons.sharedOutlinks.length) {
+    sections.push({
+      icon: "links-going-out",
+      label: "Shared links",
+      values: c.reasons.sharedOutlinks.map((l) => `[[${displayName(l)}]]`),
+    });
+  }
+  if (showReasons && c.reasons.sharedBacklinks.length) {
+    sections.push({
+      icon: "links-coming-in",
+      label: "Shared backlinks",
+      values: c.reasons.sharedBacklinks.map((l) => `[[${displayName(l)}]]`),
+    });
+  }
+  if (showReasons && c.reasons.sharedBodyTokens.length) {
+    sections.push({
+      icon: "text",
+      label: "Shared body words",
+      values: c.reasons.sharedBodyTokens.map((t) => `“${t}”`),
+    });
+  }
+  if (sections.length) {
+    // One shared 2-column grid so every section's values start at the same x,
+    // regardless of the (now icon-sized) label column.
+    const grid = tip.createDiv({ cls: "suggested-notes-reasons-tip-grid" });
+    for (const s of sections) {
+      const label = grid.createSpan({
+        cls: "suggested-notes-reasons-tip-label",
+        attr: { "aria-label": s.label },
+      });
+      setIcon(label, s.icon);
+      const vals = grid.createSpan({
+        cls: "suggested-notes-reasons-tip-values",
+      });
+      for (const v of s.values) {
+        vals.createSpan({ cls: "suggested-notes-reasons-tip-value", text: v });
+      }
+    }
+  }
+  return tip;
 }

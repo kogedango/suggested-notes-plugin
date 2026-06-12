@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type RelatedNotesPlugin from "../main";
 
 export class RelatedNotesSettingTab extends PluginSettingTab {
@@ -58,7 +58,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       text:
         "Optional. Picks up notes that share rare vocabulary even without explicit tags or links. " +
         "Off by default: enabling reads every .md file once (async, ~10–20s for 5,000 notes) to build the index. " +
-        "The active note is always re-read live; the whole-vault index rebuilds after edits settle, or on demand via the 'Rebuild body-token index' command.",
+        "The active note is always re-read live, and an edited note's index entry updates as soon as the edit settles (~2s). " +
+        "Whole-vault statistics rebuild lazily (~1 min after edits settle), " +
+        "or immediately via the Rebuild button below / 'Rebuild body-token index' command.",
       cls: "setting-item-description",
     });
 
@@ -70,6 +72,25 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           await this.plugin.rebuildBodyIndex();
         }),
+      );
+
+    new Setting(containerEl)
+      .setName("Japanese word segmentation (experimental)")
+      .setDesc(
+        "Splits Japanese text into words with TinySegmenter (offline, no dictionary) " +
+          "so okurigana-mixed words like 打ち合わせ and hiragana words like ひらめき " +
+          "also count as shared vocabulary. Changing this rebuilds the index.",
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.bodyTokenSegmenterEnabled)
+          .onChange(async (v) => {
+            this.plugin.settings.bodyTokenSegmenterEnabled = v;
+            await this.plugin.saveSettings();
+            if (this.plugin.settings.bodyTokenEnabled) {
+              await this.plugin.rebuildBodyIndex();
+            }
+          }),
       );
 
     new Setting(containerEl).setName("Body-token weight").addText((t) =>
@@ -100,6 +121,28 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
               }
             }
           }),
+      );
+
+    new Setting(containerEl)
+      .setName("Rebuild index now")
+      .setDesc(
+        "Re-reads every note and rebuilds the whole-vault statistics. " +
+          "Rarely needed: edited notes update on save, and statistics refresh " +
+          "automatically ~1 min after edits settle.",
+      )
+      .addButton((b) =>
+        b.setButtonText("Rebuild").onClick(async () => {
+          if (!this.plugin.settings.bodyTokenEnabled) {
+            new Notice("Body-token matching is disabled.");
+            return;
+          }
+          b.setDisabled(true);
+          try {
+            await this.plugin.rebuildBodyIndex(true);
+          } finally {
+            b.setDisabled(false);
+          }
+        }),
       );
 
     containerEl.createEl("h3", { text: "Display" });

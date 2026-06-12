@@ -1,6 +1,6 @@
 import type { BodyTokenIndex } from "../cache/bodyTokens";
 import type { InvertedIndex } from "../cache/inverted";
-import type { MetadataStore } from "../cache/metadata";
+import type { SnapshotReader } from "../cache/store";
 import type {
   FileSnapshot,
   PluginSettings,
@@ -18,11 +18,13 @@ import { basename } from "../util/path";
 import { IDFTables } from "./idf";
 import { outlinkCountPenalty } from "./penalties";
 
+const EMPTY_TOKENS: Set<string> = new Set();
+
 export class ScoringEngine {
   private idf: IDFTables;
 
   constructor(
-    private store: MetadataStore,
+    private store: SnapshotReader,
     private inverted: InvertedIndex,
     private body: BodyTokenIndex,
   ) {
@@ -88,8 +90,9 @@ export class ScoringEngine {
       const reasons = this.computeReasons(
         active,
         snap,
-        settings,
-        activeBodyTokens,
+        excludedTags,
+        excludedLinks,
+        useBody ? activeBodyTokens : EMPTY_TOKENS,
       );
       const raw = this.rawScore(snap, reasons, settings, snap.folder === active.folder);
       if (raw <= 0) continue;
@@ -182,15 +185,15 @@ export class ScoringEngine {
     return out.sort((a, b) => b.weight - a.weight).slice(0, limit);
   }
 
+  // Exclusion sets are normalized once per score() call and passed in —
+  // recomputing them here would cost O(candidates × excluded-list length).
   private computeReasons(
     a: FileSnapshot,
     b: FileSnapshot,
-    settings: PluginSettings,
+    excludedTags: Set<string>,
+    excludedLinks: Set<string>,
     activeBodyTokens: Set<string>,
   ): SharedReasons {
-    const excludedTags = normalizeTagSet(settings.excludedTags);
-    const excludedLinks = normalizeLinkSet(settings.excludedLinks);
-
     const sharedTags: string[] = [];
     for (const t of a.tags) {
       if (excludedTags.has(t)) continue;
@@ -206,7 +209,7 @@ export class ScoringEngine {
       if (b.backlinks.has(bl)) sharedBacklinks.push(bl);
     }
     const sharedBodyTokens: string[] = [];
-    if (settings.bodyTokenEnabled && activeBodyTokens.size > 0) {
+    if (activeBodyTokens.size > 0) {
       const bTokens = this.body.salientFor(b.path);
       if (bTokens.size > 0) {
         for (const tok of activeBodyTokens) {
