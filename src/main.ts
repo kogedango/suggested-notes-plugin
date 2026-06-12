@@ -45,9 +45,11 @@ export default class RelatedNotesPlugin extends Plugin {
 
     this.registerHoverLinkSource(VIEW_TYPE_RELATED_NOTES, {
       display: "Suggested Notes",
-      // false = preview on plain hover (no Cmd/Ctrl needed). Obsidian's core
-      // "Page preview" plugin must be enabled for this to work.
-      defaultMod: false,
+      // true = require the Cmd/Ctrl modifier to preview, matching Obsidian's
+      // default link-hover behaviour (Page Preview owns the modifier gating
+      // and its own hover delay). Obsidian's core "Page preview" plugin must
+      // be enabled for this to work.
+      defaultMod: true,
     });
 
     this.addSettingTab(new RelatedNotesSettingTab(this.app, this));
