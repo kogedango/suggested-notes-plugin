@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tokenize } from "./tokenize";
+import { collectStandaloneKanji, tokenize } from "./tokenize";
 
 describe("tokenize", () => {
   it("extracts ascii words, lowercased", () => {
@@ -55,6 +55,43 @@ describe("tokenize", () => {
     expect(tokenize("機械").has("機械")).toBe(true);
   });
 
+  it("gates interior kanji 2-grams by the corpus standalone set", () => {
+    // 機械 and 学習 are known standalone words; 械学 (and 本語/員何) are not.
+    const standalone = new Set(["機械", "学習", "日本", "全員", "文句"]);
+    const ml = tokenize("機械学習", false, standalone);
+    expect(ml.has("機械学習")).toBe(true); // full run always kept
+    expect(ml.has("機械")).toBe(true); // standalone -> kept
+    expect(ml.has("学習")).toBe(true); // standalone -> kept
+    expect(ml.has("械学")).toBe(false); // morpheme-straddling artifact -> dropped
+
+    // the reported cases: keep the real sub-word, drop the straddling 2-gram
+    const a = tokenize("日本語", false, standalone);
+    expect(a.has("日本語")).toBe(true);
+    expect(a.has("日本")).toBe(true);
+    expect(a.has("本語")).toBe(false);
+    const b = tokenize("全員何も言う", false, standalone);
+    expect(b.has("全員")).toBe(true);
+    expect(b.has("員何")).toBe(false);
+    const c = tokenize("文句言うが", false, standalone);
+    expect(c.has("文句")).toBe(true);
+    expect(c.has("句言")).toBe(false);
+  });
+
+  it("without a standalone set, every kanji 2-gram is emitted (pre-gate)", () => {
+    const out = tokenize("日本語");
+    expect(out.has("日本")).toBe(true);
+    expect(out.has("本語")).toBe(true);
+  });
+
+  it("collectStandaloneKanji gathers only length-2 kanji runs", () => {
+    const s = new Set<string>();
+    collectStandaloneKanji("機械 と 日本語 を 学習", s);
+    expect(s.has("機械")).toBe(true); // standalone 2-kanji run
+    expect(s.has("学習")).toBe(true); // standalone 2-kanji run
+    expect(s.has("日本")).toBe(false); // part of the 3-kanji run 日本語
+    expect(s.has("日本語")).toBe(false); // length 3, not a 2-gram
+  });
+
   it("segmenter mode picks up okurigana-mixed and hiragana words", () => {
     const text = "会議で打ち合わせの記録をふりかえりとして書いた";
     const seg = tokenize(text, true);
@@ -71,6 +108,24 @@ describe("tokenize", () => {
     expect(seg.has("ひらめき")).toBe(true);
     expect(seg.has("について")).toBe(false);
     expect(seg.has("の")).toBe(false);
+  });
+
+  it("segmenter mode drops sokuon-clipped conjugation fragments", () => {
+    // 使った/思った/なかった clip to 使っ/思っ/なかっ — っ never ends a real
+    // word, so these are dropped while the dictionary form survives elsewhere.
+    const seg = tokenize("資料を使った。結果は思ったほど良くなかった", true);
+    expect(seg.has("使っ")).toBe(false);
+    expect(seg.has("思っ")).toBe(false);
+    expect(seg.has("なかっ")).toBe(false);
+  });
+
+  it("segmenter mode drops high-df grammatical patterns", () => {
+    const seg = tokenize("これは設定による挙動で、ユーザーにより変わるらしい", true);
+    expect(seg.has("による")).toBe(false);
+    expect(seg.has("により")).toBe(false);
+    expect(seg.has("らしい")).toBe(false);
+    // ...but real content words around them survive.
+    expect(seg.has("挙動") || seg.has("設定")).toBe(true);
   });
 
   it("strips frontmatter", () => {

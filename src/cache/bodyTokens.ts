@@ -1,5 +1,5 @@
 import { App, TFile } from "obsidian";
-import { tokenize } from "../util/tokenize";
+import { collectStandaloneKanji, tokenize } from "../util/tokenize";
 
 // Body-token matching uses a corpus/query split:
 //
@@ -22,6 +22,11 @@ export class BodyTokenIndex {
   private inverted = new Map<string, Set<string>>();
   // Corpus: global doc-freq over full token sets (drives IDF).
   private df = new Map<string, number>();
+  // Corpus: kanji 2-grams seen as a standalone word, used to gate interior
+  // bigrams of longer runs. Frozen per rebuild like df (a 2-gram new to the
+  // vault is not trusted as a word until the next coarse rebuild — the same
+  // staleness trade-off df already accepts).
+  private standalone = new Set<string>();
   private totalNotes = 0;
   private idfCache = new Map<string, number>();
   private built = false;
@@ -32,6 +37,7 @@ export class BodyTokenIndex {
     this.salient = new Map();
     this.inverted = new Map();
     this.df = new Map();
+    this.standalone = new Set();
     this.idfCache.clear();
     this.totalNotes = 0;
     this.built = false;
@@ -78,7 +84,12 @@ export class BodyTokenIndex {
   ): Promise<Set<string>> {
     if (!this.built) return new Set();
     const body = await this.app.vault.cachedRead(file);
-    return rankSalient(tokenize(body, segment), topN, this.df, this.totalNotes);
+    return rankSalient(
+      tokenize(body, segment, this.standalone),
+      topN,
+      this.df,
+      this.totalNotes,
+    );
   }
 
   // --- Cheap corpus maintenance ---
@@ -96,7 +107,11 @@ export class BodyTokenIndex {
     segment: boolean,
   ): Promise<void> {
     if (!this.built) return;
-    const tokens = tokenize(await this.app.vault.cachedRead(file), segment);
+    const tokens = tokenize(
+      await this.app.vault.cachedRead(file),
+      segment,
+      this.standalone,
+    );
     const next = rankSalient(tokens, topN, this.df, this.totalNotes);
     this.remove(file.path);
     this.salient.set(file.path, next);
@@ -143,20 +158,41 @@ export class BodyTokenIndex {
 
   async rebuildAll(topN: number, segment: boolean): Promise<void> {
     const files = this.app.vault.getMarkdownFiles();
-    const nextDf = new Map<string, number>();
+    const nextStandalone = new Set<string>();
     const perFileTokens = new Map<string, Set<string>>();
 
+    // Pass 1: one read per note. Tokenize ungated (the standalone set isn't
+    // complete yet, so interior 2-grams can't be filtered here) and collect the
+    // standalone kanji 2-grams from the same read.
     const CHUNK = 32;
     for (let i = 0; i < files.length; i += CHUNK) {
       await Promise.all(
         files.slice(i, i + CHUNK).map(async (f) => {
-          const tokens = tokenize(await this.app.vault.cachedRead(f), segment);
+          const body = await this.app.vault.cachedRead(f);
+          const tokens = tokenize(body, segment);
           if (tokens.size === 0) return; // skip empty notes: they only dilute IDF
           perFileTokens.set(f.path, tokens);
-          for (const t of tokens) nextDf.set(t, (nextDf.get(t) ?? 0) + 1);
+          collectStandaloneKanji(body, nextStandalone);
         }),
       );
       await yieldToEventLoop(); // keep large / mobile vaults responsive
+    }
+
+    // Pass 2: the standalone set is now final, so gate each note's interior
+    // kanji 2-grams (drop morpheme-straddling artifacts like 本語 / 員何) and
+    // build df over the gated tokens. Gating in place avoids a second read of
+    // every note; it is equivalent to tokenize()'s standaloneBigrams gate —
+    // a length-2 kanji run is always in nextStandalone (it was collected
+    // above), so only never-standalone interior 2-grams are dropped.
+    const nextDf = new Map<string, number>();
+    for (const tokens of perFileTokens.values()) {
+      for (const t of tokens) {
+        if (isInteriorBigramArtifact(t, nextStandalone)) {
+          tokens.delete(t);
+          continue;
+        }
+        nextDf.set(t, (nextDf.get(t) ?? 0) + 1);
+      }
     }
 
     // Derive the whole new corpus into locals first. The live corpus keeps
@@ -181,12 +217,28 @@ export class BodyTokenIndex {
     }
 
     this.df = nextDf;
+    this.standalone = nextStandalone;
     this.totalNotes = totalNotes;
     this.salient = nextSalient;
     this.inverted = nextInverted;
     this.idfCache.clear();
     this.built = true;
   }
+}
+
+// A length-2 pure-kanji token that never appears as a standalone word is an
+// interior 2-gram straddling a morpheme boundary (本語 from 日本語, 員何 from
+// 全員何も): pure noise that only re-matches the compound the full run already
+// matches. Mirrors the standaloneBigrams gate in tokenize() for the query side.
+function isInteriorBigramArtifact(
+  token: string,
+  standalone: Set<string>,
+): boolean {
+  return (
+    token.length === 2 &&
+    !standalone.has(token) &&
+    /^[一-龥々]+$/.test(token)
+  );
 }
 
 // Rank a token set by IDF against the given doc-freq table and keep the

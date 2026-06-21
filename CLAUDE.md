@@ -35,7 +35,9 @@ Defaults: resolved links only (unresolved `[[wikilinks]]` ignored); aliases not 
 
 ### Body-token matching (optional, OFF by default)
 
-An opt-in enrichment that surfaces notes sharing rare vocabulary even without shared tags/links. It tokenizes note bodies (NFKC-normalized; CJK + ASCII, stopword- and markdown-stripped; kanji runs also emit bigrams, trailing katakana prolonged marks are normalized), keeps the top-N salient tokens per note by IDF, and adds `bodyTokenWeight × tokenIDF` per shared salient token to the score.
+An opt-in enrichment that surfaces notes sharing rare vocabulary even without shared tags/links. It tokenizes note bodies (NFKC-normalized; CJK + ASCII, stopword- and markdown-stripped; kanji runs emit the full run plus 2-grams, trailing katakana prolonged marks are normalized), keeps the top-N salient tokens per note by IDF, and adds `bodyTokenWeight × tokenIDF` per shared salient token to the score.
+
+A kanji run's interior 2-grams are **gated by a corpus `standalone` set** (the kanji 2-grams that occur as a word on their own somewhere in the vault): a 2-gram is kept only if it appears standalone, so real sub-words survive (`機械`/`学習` from `機械学習`) while morpheme-straddling artifacts are dropped (`本語` from `日本語`, `員何` from `全員何も`). The full run is always kept. `standalone` is corpus state built and **frozen per rebuild exactly like `df`** (a 2-gram new to the vault isn't trusted as a word until the next coarse rebuild), and on the query side `tokenize(body, segment, standalone)` applies the same gate. This is the one sanctioned corpus dependency inside tokenization — without the set (no corpus yet) every 2-gram is emitted.
 
 Japanese segmentation via `tiny-segmenter` (`bodyTokenSegmenterEnabled`, experimental, OFF by default) is **sanctioned** despite the "no AI" constraint: it is a ~25KB offline, deterministic, dictionary-free tokenizer bundled into the plugin — no network, no background process. The corpus and the query must always be tokenized with the same segmenter flag; toggling the setting triggers a corpus rebuild.
 
