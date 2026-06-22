@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectStandaloneKanji, tokenize } from "./tokenize";
+import { tokenize } from "./tokenize";
 
 describe("tokenize", () => {
   it("extracts ascii words, lowercased", () => {
@@ -83,13 +83,40 @@ describe("tokenize", () => {
     expect(out.has("本語")).toBe(true);
   });
 
-  it("collectStandaloneKanji gathers only length-2 kanji runs", () => {
+  it("emits katakana sub-words gated by the corpus standalone set", () => {
+    // バッテリ stands alone elsewhere (in 膨張バッテリー); リチウム does not.
+    const standalone = new Set(["バッテリ"]);
+    const out = tokenize("リチウムバッテリー", false, standalone);
+    expect(out.has("リチウムバッテリ")).toBe(true); // full run always kept
+    expect(out.has("バッテリ")).toBe(true); // standalone sub-word -> kept
+    expect(out.has("リチウム")).toBe(false); // not standalone -> dropped
+    // so a note saying just 膨張バッテリー shares バッテリ with this one
+    expect(tokenize("膨張バッテリー").has("バッテリ")).toBe(true);
+  });
+
+  it("does not emit katakana sub-words shorter than 3", () => {
+    // ログ is a real word that stands alone, but extracting it from ブログ is
+    // noise (blog != log), so 2-char sub-words are never emitted.
+    const standalone = new Set(["ログ"]);
+    const out = tokenize("ブログ", false, standalone);
+    expect(out.has("ブログ")).toBe(true); // full run
+    expect(out.has("ログ")).toBe(false); // 2-char sub-word -> never emitted
+  });
+
+  it("without a standalone set, every katakana sub-word >= 3 is emitted", () => {
+    const out = tokenize("リチウムバッテリー");
+    expect(out.has("リチウム")).toBe(true);
+    expect(out.has("バッテリ")).toBe(true);
+  });
+
+  it("harvests standalone-word units (kanji 2-grams, katakana words) via the 4th arg", () => {
     const s = new Set<string>();
-    collectStandaloneKanji("機械 と 日本語 を 学習", s);
+    tokenize("機械 と 日本語 を 学習 と 膨張バッテリー", false, undefined, s);
     expect(s.has("機械")).toBe(true); // standalone 2-kanji run
     expect(s.has("学習")).toBe(true); // standalone 2-kanji run
     expect(s.has("日本")).toBe(false); // part of the 3-kanji run 日本語
     expect(s.has("日本語")).toBe(false); // length 3, not a 2-gram
+    expect(s.has("バッテリ")).toBe(true); // standalone katakana word
   });
 
   it("segmenter mode picks up okurigana-mixed and hiragana words", () => {

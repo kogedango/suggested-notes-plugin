@@ -33,11 +33,16 @@ const JA_STOPWORDS = new Set([
   "なけれ", "ださい", "といけ", "でしょ",
 ]);
 
+// Interior katakana sub-words shorter than this are dropped: 2-char katakana
+// sub-strings of a longer run are dominated by cross-morpheme noise (ブログ→ログ,
+// コンパス→パス, リバース→バー) and the real 2-char words are already captured when
+// they stand alone (the full run is always emitted regardless of this gate).
+const KATAKANA_SUBWORD_MIN = 3;
+
 // NFKC folds full-width ASCII, half-width katakana, and decomposed kana into
 // their canonical forms so "Ｏbsidian"/"ﾉｰﾄ" tokenize the same as the plain
 // forms, then markdown/frontmatter/code/links are stripped so only prose text
-// reaches the matcher. Shared by tokenize() and collectStandaloneKanji() so the
-// standalone set is built over exactly the text tokenize() sees.
+// reaches the matcher.
 function strip(body: string): string {
   return body
     .normalize("NFKC")
@@ -57,16 +62,24 @@ function strip(body: string): string {
 // hiragana-only words (ひらめき). Corpus and query must be tokenized with the
 // same flag — toggling the setting triggers a corpus rebuild.
 //
-// `standaloneBigrams` is the corpus's set of kanji 2-grams that appear as a
-// word on their own somewhere in the vault (see collectStandaloneKanji). When
-// provided, a kanji run's interior 2-grams are emitted only if they are in it,
-// which drops morpheme-straddling artifacts (本語 from 日本語, 員何 from 全員何も)
-// while keeping real sub-words (機械/学習 from 機械学習). When omitted (no corpus
-// yet) every 2-gram is emitted, the pre-gate behaviour.
+// `standalone` is the corpus's set of standalone-word units: kanji 2-grams and
+// katakana words that appear on their own somewhere in the vault. When provided
+// it gates interior sub-units of longer runs — a kanji run's 2-grams and a
+// katakana run's sub-words are emitted only if they occur standalone elsewhere,
+// dropping morpheme-straddling artifacts (本語 from 日本語, リチウム+バッテリー only
+// matching the same compound) while keeping real sub-words (機械/学習 from 機械学習,
+// バッテリ from リチウムバッテリー). The full run is always kept. When omitted (no
+// corpus yet) every sub-unit is emitted, the pre-gate behaviour.
+//
+// `collectStandaloneInto`, when provided, harvests those standalone-word units
+// from the same scan (a length-2 kanji run, a whole katakana word). This folds
+// what used to be a separate corpus pass into tokenize's single matchAll, so a
+// rebuild reads and scans each note once. Frozen per rebuild, exactly like df.
 export function tokenize(
   body: string,
   segment = false,
-  standaloneBigrams?: Set<string>,
+  standalone?: Set<string>,
+  collectStandaloneInto?: Set<string>,
 ): Set<string> {
   const stripped = strip(body);
 
@@ -78,26 +91,13 @@ export function tokenize(
       const low = tok.toLowerCase();
       if (!ASCII_STOPWORDS.has(low)) out.add(low);
     } else if (/[ァ-ヶー]/.test(first)) {
-      const k = normalizeKatakana(tok);
-      if (k) out.add(k);
+      addKatakanaRun(out, tok, standalone, collectStandaloneInto);
     } else {
-      addKanjiRun(out, tok, standaloneBigrams);
+      addKanjiRun(out, tok, standalone, collectStandaloneInto);
     }
   }
   if (segment) addSegmented(out, stripped);
   return out;
-}
-
-// Collect the kanji 2-grams that occur as a *standalone* run (a kanji run of
-// exactly two characters) — our dictionary-free proxy for "this 2-gram is a
-// real word". Only these are trusted as interior bigrams of longer runs; a
-// 2-gram that never stands on its own (本語, 員何, 械学) is a morpheme-straddling
-// artifact. Built corpus-wide and frozen per rebuild, exactly like df.
-export function collectStandaloneKanji(body: string, into: Set<string>): void {
-  for (const m of strip(body).matchAll(TOKEN_RE)) {
-    const tok = m[0];
-    if (tok.length === 2 && /^[一-龥々]+$/.test(tok)) into.add(tok);
-  }
 }
 
 // Long-vowel spelling variants (サーバ/サーバー, ユーザ/ユーザー) should match,
@@ -109,6 +109,36 @@ function normalizeKatakana(tok: string): string | null {
   if (trimmed.length >= 2) return trimmed;
   if (core.length >= 2) return core;
   return null; // ー-only runs or a lone kana are noise
+}
+
+// A continuous katakana run (リチウムバッテリー) glues loanwords together and would
+// only ever match the exact same compound — the same recall problem addKanjiRun
+// fixes for kanji. So emit the full run (rare → high IDF on exact match) plus its
+// interior sub-words, gated by the corpus standalone set: a sub-word survives
+// only if it occurs as a word on its own elsewhere (バッテリ from a note that
+// writes 膨張バッテリー), which keeps real loanwords and drops noise. Sub-words are
+// length-gated (KATAKANA_SUBWORD_MIN) since short fragments are mostly noise.
+// Without the set (no corpus yet) every sub-word is emitted, the pre-gate path.
+function addKatakanaRun(
+  out: Set<string>,
+  run: string,
+  standalone?: Set<string>,
+  collectInto?: Set<string>,
+): void {
+  const full = normalizeKatakana(run);
+  if (!full) return;
+  out.add(full);
+  // The full run stood alone here, so it is itself a standalone katakana word —
+  // harvest it so longer runs elsewhere can split on it.
+  if (collectInto) collectInto.add(full);
+
+  for (let i = 0; i < run.length; i++) {
+    for (let j = i + KATAKANA_SUBWORD_MIN; j <= run.length; j++) {
+      const sub = normalizeKatakana(run.slice(i, j));
+      if (!sub || sub.length < KATAKANA_SUBWORD_MIN || sub === full) continue;
+      if (!standalone || standalone.has(sub)) out.add(sub);
+    }
+  }
 }
 
 // Greedy script-run matching glues kanji compounds together (機械学習基盤 is
@@ -128,12 +158,15 @@ function normalizeKatakana(tok: string): string | null {
 function addKanjiRun(
   out: Set<string>,
   run: string,
-  standaloneBigrams?: Set<string>,
+  standalone?: Set<string>,
+  collectInto?: Set<string>,
 ): void {
   out.add(run);
+  // A length-2 kanji run standing on its own is our standalone-word proxy.
+  if (collectInto && run.length === 2) collectInto.add(run);
   for (let i = 0; i + 2 <= run.length; i++) {
     const bg = run.slice(i, i + 2);
-    if (!standaloneBigrams || standaloneBigrams.has(bg)) out.add(bg);
+    if (!standalone || standalone.has(bg)) out.add(bg);
   }
 }
 

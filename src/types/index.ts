@@ -21,6 +21,10 @@ export interface PluginSettings {
   excludedFolders: string[];
   excludedTags: string[];
   excludedLinks: string[];
+  // Body-token stopwords: words (e.g. recurring heading words like コメント /
+  // 結果) that should never count as a shared body signal. Normalized through
+  // the same tokenizer the bodies use, so the entered word matches the token.
+  excludedBodyTokens: string[];
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -43,6 +47,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   excludedFolders: [],
   excludedTags: [],
   excludedLinks: [],
+  excludedBodyTokens: [],
 };
 
 export interface FileSnapshot {

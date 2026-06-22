@@ -138,6 +138,34 @@ describe("ScoringEngine.score", () => {
     expect(results).toEqual([]);
   });
 
+  it("excluded body-token words neither generate candidates nor score", () => {
+    // A body mock where both notes share the salient token コメント.
+    const body = {
+      salientFor: (p: string) =>
+        p === "match.md" ? new Set(["コメント"]) : new Set<string>(),
+      filesWithToken: (t: string) =>
+        t === "コメント" ? new Set(["match.md"]) : new Set<string>(),
+      idf: () => 1,
+    } as unknown as BodyTokenIndex;
+    const store = new SnapshotStore();
+    store.rebuildAll([snap("active.md"), snap("match.md")]);
+    const inverted = new InvertedIndex(store);
+    inverted.rebuild();
+    const e = new ScoringEngine(store, inverted, body);
+
+    const active = new Set(["コメント"]);
+    // Without exclusion the shared token surfaces match.md.
+    const on = e.score("active.md", settings({ bodyTokenEnabled: true }), active);
+    expect(on.results.map((r) => r.path)).toEqual(["match.md"]);
+    // Excluding the word drops the only signal -> no candidate.
+    const off = e.score(
+      "active.md",
+      settings({ bodyTokenEnabled: true, excludedBodyTokens: ["コメント"] }),
+      active,
+    );
+    expect(off.results).toEqual([]);
+  });
+
   it("excluded folders remove candidates entirely", () => {
     const e = engine([
       snap("active.md", { tags: ["x"] }),

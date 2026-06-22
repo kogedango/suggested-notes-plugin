@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import {
   isExcludedByFolder,
+  normalizeBodyTokenSet,
   normalizeLinkSet,
   normalizeTagSet,
 } from "../util/normalize";
@@ -49,6 +50,13 @@ export class ScoringEngine {
     const excludedTags = normalizeTagSet(settings.excludedTags);
     const excludedLinks = normalizeLinkSet(settings.excludedLinks);
     const useBody = settings.bodyTokenEnabled && activeBodyTokens.size > 0;
+    const excludedBody =
+      useBody && settings.excludedBodyTokens.length > 0
+        ? normalizeBodyTokenSet(
+            settings.excludedBodyTokens,
+            settings.bodyTokenSegmenterEnabled,
+          )
+        : EMPTY_TOKENS;
 
     const candidates = new Set<string>();
 
@@ -70,6 +78,7 @@ export class ScoringEngine {
     }
     if (useBody) {
       for (const tok of activeBodyTokens) {
+        if (excludedBody.has(tok)) continue;
         for (const p of this.body.filesWithToken(tok)) {
           if (p !== activePath) candidates.add(p);
         }
@@ -93,6 +102,7 @@ export class ScoringEngine {
         excludedTags,
         excludedLinks,
         useBody ? activeBodyTokens : EMPTY_TOKENS,
+        excludedBody,
       );
       const raw = this.rawScore(snap, reasons, settings, snap.folder === active.folder);
       if (raw <= 0) continue;
@@ -193,6 +203,7 @@ export class ScoringEngine {
     excludedTags: Set<string>,
     excludedLinks: Set<string>,
     activeBodyTokens: Set<string>,
+    excludedBody: Set<string>,
   ): SharedReasons {
     const sharedTags: string[] = [];
     for (const t of a.tags) {
@@ -213,6 +224,7 @@ export class ScoringEngine {
       const bTokens = this.body.salientFor(b.path);
       if (bTokens.size > 0) {
         for (const tok of activeBodyTokens) {
+          if (excludedBody.has(tok)) continue;
           if (bTokens.has(tok)) sharedBodyTokens.push(tok);
         }
       }

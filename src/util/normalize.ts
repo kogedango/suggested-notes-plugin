@@ -1,3 +1,22 @@
+import { tokenize } from "./tokenize";
+
+// User-entered body-token stopwords (recurring heading words like コメント /
+// 結果) are run through the same tokenizer the note bodies use, so their
+// canonical token forms line up with what lands in salient sets — width/case
+// folding and katakana long-vowel normalization included. `segment` must match
+// the corpus flag so a word tokenizes to the same form on both sides.
+export function normalizeBodyTokenSet(
+  list: string[],
+  segment: boolean,
+): Set<string> {
+  const out = new Set<string>();
+  for (const raw of list) {
+    if (!raw.trim()) continue;
+    for (const t of tokenize(raw, segment)) out.add(t);
+  }
+  return out;
+}
+
 export function normalizeFolder(s: string): string {
   return s.trim().replace(/^\/+/, "").replace(/\/+$/, "");
 }

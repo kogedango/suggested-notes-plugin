@@ -191,7 +191,11 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     const listSetting = (
       name: string,
       desc: string,
-      key: "excludedFolders" | "excludedTags" | "excludedLinks",
+      key:
+        | "excludedFolders"
+        | "excludedTags"
+        | "excludedLinks"
+        | "excludedBodyTokens",
     ) => {
       new Setting(containerEl)
         .setName(name)
@@ -222,6 +226,13 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       "Excluded links",
       "One note basename per line (e.g. 'Linux', not '[[Linux]]').",
       "excludedLinks",
+    );
+    listSetting(
+      "Excluded body-token words",
+      "One word per line. Recurring heading words you don't want to count as a " +
+        "shared body signal (e.g. コメント, 結果, メモ). Only used when body-token " +
+        "matching is on; takes effect immediately, no rebuild needed.",
+      "excludedBodyTokens",
     );
   }
 }
