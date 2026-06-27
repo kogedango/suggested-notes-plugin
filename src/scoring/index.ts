@@ -242,7 +242,15 @@ export class ScoringEngine {
     for (const t of r.sharedTags) s += settings.tagWeight * this.idf.tag(t);
     for (const l of r.sharedOutlinks)
       s += settings.outlinkWeight * this.idf.link(l);
-    s += settings.backlinkWeight * r.sharedBacklinks.length;
+    // Weight each shared backlink by the source's specificity: a co-citation
+    // from a focused note is a stronger relatedness signal than one from a
+    // MOC/index that links to everything. Reuses the outlink-count penalty on
+    // the source note (few outlinks -> weight ~1, many -> approaches 0).
+    for (const src of r.sharedBacklinks) {
+      const source = this.store.get(src);
+      const weight = source ? 1 / outlinkCountPenalty(source.outlinkCount) : 1;
+      s += settings.backlinkWeight * weight;
+    }
     if (settings.folderWeight > 0 && sameFolder) {
       s += settings.folderWeight;
     }

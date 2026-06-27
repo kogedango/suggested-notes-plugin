@@ -102,6 +102,28 @@ describe("ScoringEngine.score", () => {
     expect(sibling.rawScore).toBeGreaterThan(plain.rawScore);
   });
 
+  it("weights a backlink from a focused source above one from a MOC", () => {
+    // Both candidates are co-cited with active, but `focused` shares a source
+    // that links to just the two of them, while `viamoc` shares a source that
+    // links to everything. The focused co-citation should score higher.
+    // Both siblings enter the candidate set via the shared tag; the backlink
+    // only boosts (a pure co-citation does not generate a candidate on its own).
+    const mocLinks = Array.from({ length: 40 }, (_, i) => `f${i}.md`);
+    const e = engine([
+      snap("active.md", { tags: ["x"] }),
+      snap("focused.md", { tags: ["x"] }),
+      snap("viamoc.md", { tags: ["x"] }),
+      snap("src.md", { outlinks: ["active.md", "focused.md"] }),
+      snap("moc.md", { outlinks: ["active.md", "viamoc.md", ...mocLinks] }),
+    ]);
+    const { results } = e.score("active.md", settings(), NO_TOKENS);
+    const focused = results.find((r) => r.path === "focused.md")!;
+    const viamoc = results.find((r) => r.path === "viamoc.md")!;
+    expect(focused.reasons.sharedBacklinks).toEqual(["src.md"]);
+    expect(viamoc.reasons.sharedBacklinks).toEqual(["moc.md"]);
+    expect(focused.rawScore).toBeGreaterThan(viamoc.rawScore);
+  });
+
   it("flags already-linked candidates and hides them only from results", () => {
     const e = engine([
       snap("active.md", { tags: ["x"], outlinks: ["linked.md"] }),
