@@ -215,6 +215,9 @@ export class RelatedNotesView extends ItemView {
       if (!reasons.textContent) reasons.remove();
     }
 
+    if (!c.alreadyLinked) {
+      this.attachAppendButton(self, activePath, c.path);
+    }
     this.attachCopyButton(self, activePath, c.path);
   }
 
@@ -291,7 +294,7 @@ export class RelatedNotesView extends ItemView {
     targetPath: string,
   ): void {
     const copyBtn = self.createEl("div", {
-      cls: "clickable-icon suggested-notes-insert",
+      cls: "clickable-icon suggested-notes-copy",
       attr: { "aria-label": "Copy link" },
     });
     setIcon(copyBtn, "copy");
@@ -307,6 +310,36 @@ export class RelatedNotesView extends ItemView {
         copyBtn.empty();
         setIcon(copyBtn, "copy");
         copyBtn.removeClass("is-copied");
+      }, 1200);
+    });
+  }
+
+  // Appends the link to the end of the active note (never mutates the
+  // target). Hidden entirely when already linked — see renderRow — since
+  // appending a duplicate link makes no sense there; the copy button stays
+  // available regardless.
+  private attachAppendButton(
+    self: HTMLElement,
+    activePath: string,
+    targetPath: string,
+  ): void {
+    const addBtn = self.createEl("div", {
+      cls: "clickable-icon suggested-notes-insert",
+      attr: { "aria-label": "Add link to note" },
+    });
+    setIcon(addBtn, "link");
+    let addedTimer: number | undefined;
+    addBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await this.plugin.appendLinkToActive(activePath, targetPath);
+      window.clearTimeout(addedTimer);
+      addBtn.empty();
+      setIcon(addBtn, "check");
+      addBtn.addClass("is-copied");
+      addedTimer = window.setTimeout(() => {
+        addBtn.empty();
+        setIcon(addBtn, "link");
+        addBtn.removeClass("is-copied");
       }, 1200);
     });
   }

@@ -129,17 +129,21 @@
   word-break: break-word;
 }
 
+.suggested-notes-copy,
 .suggested-notes-insert {
   flex-shrink: 0;
   opacity: 0;
   transition: opacity 0.1s;
 }
 
+.suggested-notes-self:hover .suggested-notes-copy,
+.suggested-notes-copy.is-copied,
 .suggested-notes-self:hover .suggested-notes-insert,
 .suggested-notes-insert.is-copied {
   opacity: 1;
 }
 
+.suggested-notes-copy.is-copied,
 .suggested-notes-insert.is-copied {
   color: var(--text-success, var(--interactive-accent));
 }

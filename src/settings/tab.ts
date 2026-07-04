@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type RelatedNotesPlugin from "../main";
+import { parseListInput } from "../util/list";
 
 export class RelatedNotesSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: RelatedNotesPlugin) {
@@ -68,7 +69,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         "Off by default: enabling reads every .md file once (async, ~10–20s for 5,000 notes) to build the index. " +
         "The active note is always re-read live, and an edited note's index entry updates as soon as the edit settles (~2s). " +
         "Whole-vault statistics rebuild lazily (~1 min after edits settle), " +
-        "or immediately via the Rebuild button below / 'Rebuild body-token index' command.",
+        "or immediately via the Rebuild button below / 'Rebuild body-token index' command. " +
+        "For Japanese vaults, also enable Japanese word segmentation below.",
       cls: "setting-item-description",
     });
 
@@ -83,11 +85,12 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Japanese word segmentation (experimental)")
+      .setName("Japanese word segmentation (recommended for Japanese vaults)")
       .setDesc(
         "Splits Japanese text into words with TinySegmenter (offline, no dictionary) " +
-          "so okurigana-mixed words like 打ち合わせ and hiragana words like ひらめき " +
-          "also count as shared vocabulary. Changing this rebuilds the index.",
+          "so okurigana-mixed words like 打ち合わせ・読み込み and hiragana words like " +
+          "ひらめき also count as shared vocabulary — without this, such words are " +
+          "invisible to body-token matching. Changing this rebuilds the index.",
       )
       .addToggle((t) =>
         t
@@ -196,6 +199,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       cls: "setting-item-description",
     });
 
+    // splitCommas only where a comma can never be part of a valid entry —
+    // folder paths and note basenames may legally contain commas.
     const listSetting = (
       name: string,
       desc: string,
@@ -204,6 +209,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         | "excludedTags"
         | "excludedLinks"
         | "excludedBodyTokens",
+      splitCommas: boolean,
     ) => {
       new Setting(containerEl)
         .setName(name)
@@ -212,10 +218,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
           t
             .setValue(this.plugin.settings[key].join("\n"))
             .onChange(async (v) => {
-              this.plugin.settings[key] = v
-                .split("\n")
-                .map((s) => s.trim())
-                .filter(Boolean);
+              this.plugin.settings[key] = parseListInput(v, splitCommas);
               await save();
             }),
         );
@@ -224,23 +227,28 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       "Excluded folders",
       "One folder path per line. Both 'Daily/' and '/Daily' are accepted.",
       "excludedFolders",
+      false,
     );
     listSetting(
       "Excluded tags",
-      "One tag per line, without the leading #.",
+      "One tag per line or comma-separated, without the leading #.",
       "excludedTags",
+      true,
     );
     listSetting(
       "Excluded links",
       "One note basename per line (e.g. 'Linux', not '[[Linux]]').",
       "excludedLinks",
+      false,
     );
     listSetting(
       "Excluded body-token words",
-      "One word per line. Recurring heading words you don't want to count as a " +
-        "shared body signal (e.g. コメント, 結果, メモ). Only used when body-token " +
-        "matching is on; takes effect immediately, no rebuild needed.",
+      "One word per line or comma-separated. Recurring heading words you don't " +
+        "want to count as a shared body signal (e.g. コメント, 結果, メモ). " +
+        "Only used when body-token matching is on; takes effect immediately, " +
+        "no rebuild needed.",
       "excludedBodyTokens",
+      true,
     );
   }
 }

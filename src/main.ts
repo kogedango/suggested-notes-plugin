@@ -13,6 +13,7 @@ import { MetadataStore } from "./cache/metadata";
 import { ScoringEngine } from "./scoring";
 import { RelatedNotesSettingTab } from "./settings/tab";
 import { DEFAULT_SETTINGS, PluginSettings } from "./types";
+import { parseListInput } from "./util/list";
 import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
 const EMPTY_TOKENS: Set<string> = new Set();
@@ -177,6 +178,11 @@ export default class RelatedNotesPlugin extends Plugin {
       DEFAULT_SETTINGS,
       await this.loadData(),
     );
+    // Heal lists saved before the comma-aware parser: a comma-separated line
+    // used to be stored as one entry that could never match anything.
+    for (const key of ["excludedTags", "excludedBodyTokens"] as const) {
+      this.settings[key] = parseListInput(this.settings[key].join("\n"), true);
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -415,5 +421,30 @@ export default class RelatedNotesPlugin extends Plugin {
       activePath,
     );
     await navigator.clipboard.writeText(link);
+  }
+
+  // MVP insertion only ever appends to the ACTIVE note — the target note is
+  // never mutated (see CLAUDE.md). activePath is re-checked against the
+  // current active file the same way addTagToActive does, since the button
+  // click is async and the user may have switched notes by the time it runs.
+  async appendLinkToActive(
+    activePath: string,
+    targetPath: string,
+  ): Promise<void> {
+    const active = this.app.workspace.getActiveFile();
+    if (!active || active.path !== activePath) {
+      new Notice("Active note has changed.");
+      return;
+    }
+    const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
+    if (!(targetFile instanceof TFile)) return;
+    const link = this.app.fileManager.generateMarkdownLink(
+      targetFile,
+      activePath,
+    );
+    await this.app.vault.process(active, (data) =>
+      data.endsWith("\n") ? `${data}${link}\n` : `${data}\n${link}\n`,
+    );
+    new Notice(`Added link to ${targetFile.basename}`);
   }
 }
