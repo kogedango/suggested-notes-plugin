@@ -188,6 +188,69 @@ describe("ScoringEngine.score", () => {
     expect(off.results).toEqual([]);
   });
 
+  it("surfaces a backlink-only candidate (B->A, no other shared signal) via directLinkWeight", () => {
+    const e = engine([
+      snap("active.md"),
+      // linksBack links to active but shares no tags/outlinks/folder.
+      snap("linksBack.md", { outlinks: ["active.md"] }),
+    ]);
+    const { results } = e.score("active.md", settings(), NO_TOKENS);
+    expect(results.map((r) => r.path)).toEqual(["linksBack.md"]);
+    expect(results[0].reasons.linksToActive).toBe(true);
+  });
+
+  it("does not flag linksToActive when the active note doesn't have that backlink", () => {
+    const e = engine([
+      snap("active.md", { tags: ["x"] }),
+      snap("match.md", { tags: ["x"] }),
+      // untagged filler keeps tag "x"'s IDF above zero (see other tests).
+      snap("filler.md"),
+    ]);
+    const { results } = e.score("active.md", settings(), NO_TOKENS);
+    const match = results.find((r) => r.path === "match.md")!;
+    expect(match).toBeDefined();
+    expect(match.reasons.linksToActive).toBe(false);
+  });
+
+  it("does not flag linksToActive for a mutual link (already linked back)", () => {
+    const e = engine([
+      snap("active.md", { tags: ["x"], outlinks: ["mutual.md"] }),
+      snap("mutual.md", { tags: ["x"], outlinks: ["active.md"] }),
+      // untagged filler keeps tag "x"'s IDF above zero (see other tests).
+      snap("filler.md"),
+    ]);
+    const { results } = e.score("active.md", settings(), NO_TOKENS);
+    const mutual = results.find((r) => r.path === "mutual.md")!;
+    expect(mutual).toBeDefined();
+    expect(mutual.alreadyLinked).toBe(true);
+    expect(mutual.reasons.linksToActive).toBe(false);
+  });
+
+  it("discovers a co-cited candidate through a focused backlink hub", () => {
+    // hub links to both active and b, and has few enough outlinks to count
+    // as "focused". b shares no tags/outlinks/folder with active on its own.
+    const e = engine([
+      snap("active.md"),
+      snap("b.md"),
+      snap("hub.md", { outlinks: ["active.md", "b.md"] }),
+    ]);
+    const { results } = e.score("active.md", settings(), NO_TOKENS);
+    const b = results.find((r) => r.path === "b.md");
+    expect(b).toBeDefined();
+    expect(b!.reasons.sharedBacklinks).toEqual(["hub.md"]);
+  });
+
+  it("does not expand through a hub whose outlinkCount exceeds the focused-source threshold", () => {
+    const mocLinks = Array.from({ length: 25 }, (_, i) => `f${i}.md`);
+    const e = engine([
+      snap("active.md"),
+      snap("b.md"),
+      snap("hub.md", { outlinks: ["active.md", "b.md", ...mocLinks] }),
+    ]);
+    const { results } = e.score("active.md", settings(), NO_TOKENS);
+    expect(results.find((r) => r.path === "b.md")).toBeUndefined();
+  });
+
   it("excluded folders remove candidates entirely", () => {
     const e = engine([
       snap("active.md", { tags: ["x"] }),

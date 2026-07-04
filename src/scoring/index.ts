@@ -21,6 +21,12 @@ import { outlinkCountPenalty } from "./penalties";
 
 const EMPTY_TOKENS: Set<string> = new Set();
 
+// Backlink sources with more outlinks than this look like MOC/index notes —
+// their outlink lists aren't a meaningful "these two are related" signal, so
+// candidate expansion doesn't follow them (mirrors the outlink-count penalty
+// used elsewhere to suppress MOC dominance).
+const FOCUSED_SOURCE_MAX_OUTLINKS = 20;
+
 export class ScoringEngine {
   private idf: IDFTables;
 
@@ -73,8 +79,27 @@ export class ScoringEngine {
       }
     }
     for (const p of active.backlinks) candidates.add(p);
+    // Item 2: notes co-cited from a "focused" hub are discoverable even
+    // without a shared tag/link of their own. A hub with too many outlinks
+    // (MOC/index) is skipped; sharedBacklinks scoring (already weighted by
+    // source specificity) naturally scores whatever surfaces here.
+    for (const src of active.backlinks) {
+      const source = this.store.get(src);
+      if (!source || source.outlinkCount > FOCUSED_SOURCE_MAX_OUTLINKS) continue;
+      for (const p of source.outlinks) {
+        if (p !== activePath) candidates.add(p);
+      }
+    }
     for (const p of active.outlinks) {
       if (p !== activePath) candidates.add(p);
+    }
+    // Item 7: folderWeight only ever scored same-folder notes that were
+    // already candidates via another signal; discover them directly, but
+    // only when the setting is actually in use (default 0 -> no change).
+    if (settings.folderWeight > 0) {
+      for (const p of this.inverted.filesInFolder(active.folder)) {
+        if (p !== activePath) candidates.add(p);
+      }
     }
     if (useBody) {
       for (const tok of activeBodyTokens) {
@@ -229,7 +254,19 @@ export class ScoringEngine {
         }
       }
     }
-    return { sharedTags, sharedOutlinks, sharedBacklinks, sharedBodyTokens };
+    // Item 1: the direct, asymmetric link signal — b links to a AND a hasn't
+    // linked back yet. A mutual pair is excluded: the point of this signal is
+    // surfacing link-back opportunities, and the UI copy ("not linked back
+    // yet") depends on the asymmetry. Distinct from sharedBacklinks'
+    // co-citation.
+    const linksToActive = a.backlinks.has(b.path) && !a.outlinks.has(b.path);
+    return {
+      sharedTags,
+      sharedOutlinks,
+      sharedBacklinks,
+      sharedBodyTokens,
+      linksToActive,
+    };
   }
 
   private rawScore(
@@ -251,6 +288,10 @@ export class ScoringEngine {
       const weight = source ? 1 / outlinkCountPenalty(source.outlinkCount) : 1;
       s += settings.backlinkWeight * weight;
     }
+    // Item 1: flat add, no IDF/specificity factor — the final
+    // outlinkCountPenalty(b.outlinkCount) division already suppresses
+    // MOC-like candidates.
+    if (r.linksToActive) s += settings.directLinkWeight;
     if (settings.folderWeight > 0 && sameFolder) {
       s += settings.folderWeight;
     }

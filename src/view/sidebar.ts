@@ -63,6 +63,16 @@ export class RelatedNotesView extends ItemView {
       true,
     );
     this.render();
+    // onOpen runs exactly once, when this view instance is created (e.g. the
+    // sidebar is (re)opened) — never on a plain focus change — so this can't
+    // reintroduce the copy-button double-click bug that active-leaf-change's
+    // own-focus guard exists to avoid (see main.ts). Without this, reopening
+    // the sidebar on the *same* active note as before would never refresh:
+    // active-leaf-change dedupes on lastRefreshedPath, which a fresh view
+    // instance hasn't earned yet. requestRefresh() re-runs the (idempotent)
+    // refresh unconditionally; refresh()'s own "not ready yet" guard keeps
+    // the loading placeholder up if the plugin hasn't finished indexing.
+    this.plugin.requestRefresh();
   }
 
   async onClose(): Promise<void> {
@@ -84,8 +94,13 @@ export class RelatedNotesView extends ItemView {
     results: ScoredCandidate[],
     suggestedTags: SuggestedTag[],
   ): void {
+    // Only truly empty (no related notes AND no tag suggestions) collapses
+    // to the "empty" state. `hideAlreadyLinked` can legitimately drain
+    // `results` while `suggestedTags` still has content — the scoring layer
+    // deliberately keeps already-linked notes in the tag pool (see
+    // ScoreResult) — so that case must still render the tags section.
     this.state =
-      results.length === 0
+      results.length === 0 && suggestedTags.length === 0
         ? { kind: "empty" }
         : { kind: "ready", activePath, results, suggestedTags };
     this.render();
@@ -124,7 +139,21 @@ export class RelatedNotesView extends ItemView {
           this.state.activePath,
           this.state.suggestedTags,
         );
-        this.renderList(container, this.state.activePath, this.state.results);
+        if (this.state.results.length === 0) {
+          // Same status copy as the "empty" state — only the tags section
+          // above differs, since suggestedTags is what kept us out of
+          // "empty" in the first place.
+          container.createEl("div", {
+            text: "No related notes found.",
+            cls: "suggested-notes-status",
+          });
+        } else {
+          this.renderList(
+            container,
+            this.state.activePath,
+            this.state.results,
+          );
+        }
         return;
     }
   }
@@ -335,6 +364,9 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
         .join(" "),
     );
   }
+  if (c.reasons.linksToActive) {
+    parts.push("links to this note");
+  }
   if (c.reasons.sharedBacklinks.length) {
     parts.push(`+${c.reasons.sharedBacklinks.length} shared backlink(s)`);
   }
@@ -385,6 +417,13 @@ function buildInfoTip(
       icon: "links-going-out",
       label: "Shared links",
       values: c.reasons.sharedOutlinks.map((l) => `[[${displayName(l)}]]`),
+    });
+  }
+  if (showReasons && c.reasons.linksToActive) {
+    sections.push({
+      icon: "link",
+      label: "Links to this note",
+      values: ["Links here, not linked back yet"],
     });
   }
   if (showReasons && c.reasons.sharedBacklinks.length) {

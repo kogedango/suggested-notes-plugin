@@ -16,12 +16,14 @@ Core pipeline:
    - `file -> { tags, outlinks, backlinks, ctime, mtime, outlinkCount }`
    - Inverted indexes: `tag -> Set<file>`, `link -> Set<file>`
    - IDF tables for tags and links (lazy-recomputed when marked dirty).
-4. On active-note change, generate candidates by querying inverted indexes with the active note's tags/outlinks (never full-vault scan), then score that candidate set only.
+4. On active-note change, generate candidates by querying inverted indexes with the active note's tags/outlinks (never full-vault scan), then score that candidate set only. Candidate generation also expands through: (a) backlink sources with outlinkCount ≤ `FOCUSED_SOURCE_MAX_OUTLINKS` (20) — their other outlinks become candidates, since a focused hub co-citing two notes is discoverable evidence, not just a scoring bonus; and (b) same-folder notes, but only when `folderWeight > 0` (default 0, so no behavior change out of the box).
 5. `metadataCache.on("changed")` performs incremental updates; debounce recomputation ~300ms.
 
 ### Scoring (mandatory baseline — not optional)
 
-Weighted sum of shared signals (default weights: outlinks 8, tags 5, backlinks 4, folder 0) with these required adjustments:
+Weighted sum of shared signals (default weights: outlinks 8, tags 5, backlinks 4, direct link 6, folder 0) with these required adjustments:
+
+- **Direct link** (`directLinkWeight`, default 6): a flat add (no IDF) when the candidate links to the active note but the active note doesn't link back yet — this is distinct from *shared* backlinks (`backlinkWeight`), which score co-citation from a third note, not a direct link between the two notes themselves.
 
 - **Outlink-count penalty**: divide candidate score by `log(1 + outlinkCount)` to suppress MOC/index dominance.
 - **Tag IDF**: weight each shared tag by `log(totalNotes / notesWithTag)`.
@@ -35,7 +37,7 @@ Defaults: resolved links only (unresolved `[[wikilinks]]` ignored); aliases not 
 
 ### Body-token matching (optional, OFF by default)
 
-An opt-in enrichment that surfaces notes sharing rare vocabulary even without shared tags/links. It tokenizes note bodies (NFKC-normalized; CJK + ASCII, stopword- and markdown-stripped; kanji runs emit the full run plus 2-grams, katakana runs emit the full run plus interior sub-words, trailing katakana prolonged marks are normalized), keeps the top-N salient tokens per note by IDF, and adds `bodyTokenWeight × tokenIDF` per shared salient token to the score.
+An opt-in enrichment that surfaces notes sharing rare vocabulary even without shared tags/links. It tokenizes note bodies (NFKC-normalized; CJK + ASCII, stopword- and markdown-stripped; kanji runs emit the full run plus 2-grams, katakana runs emit the full run plus interior sub-words, trailing katakana prolonged marks are normalized) into a token → in-body occurrence count map, keeps the top-N salient tokens per note ranked by `log(1 + TF) × IDF` (so a token the note genuinely repeats outranks an equally-rare token it only mentions once), and adds `bodyTokenWeight × tokenIDF` per shared salient token to the score. TF only decides which tokens make the top-N cut — `df` (and therefore IDF, and the df≥2 / df≤40%-of-vault salience gates) stays purely presence-based (0/1 per note) and is unaffected by within-note repetition; it is still frozen per rebuild exactly as described below.
 
 A run's interior sub-units are **gated by a corpus `standalone` set** (the standalone-word units — kanji 2-grams and whole katakana words — that occur as a word on their own somewhere in the vault): a sub-unit is kept only if it appears standalone, so real sub-words survive (`機械`/`学習` from `機械学習`, `バッテリ` from `リチウムバッテリー` when `膨張バッテリー` exists elsewhere) while morpheme-straddling artifacts are dropped (`本語` from `日本語`, `員何` from `全員何も`, the cross-morpheme fragments of katakana compounds). The full run is always kept. Katakana sub-words are additionally length-gated (min 3) — 2-char sub-strings are mostly cross-morpheme noise (`ログ` from `ブログ`, `パス` from `コンパス`) and real 2-char words are already caught when they stand alone. `standalone` is corpus state built and **frozen per rebuild exactly like `df`** (a unit new to the vault isn't trusted as a word until the next coarse rebuild) and harvested from the same single scan that tokenizes each note (`tokenize(body, segment, undefined, collectInto)`); on the query side `tokenize(body, segment, standalone)` applies the same gate. This is the one sanctioned corpus dependency inside tokenization — without the set (no corpus yet) every sub-unit is emitted.
 

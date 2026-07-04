@@ -12,7 +12,7 @@ export function normalizeBodyTokenSet(
   const out = new Set<string>();
   for (const raw of list) {
     if (!raw.trim()) continue;
-    for (const t of tokenize(raw, segment)) out.add(t);
+    for (const t of tokenize(raw, segment).keys()) out.add(t);
   }
   return out;
 }

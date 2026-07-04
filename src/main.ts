@@ -219,12 +219,23 @@ export default class RelatedNotesPlugin extends Plugin {
           this.settings.bodyTokenSegmenterEnabled,
         );
       } while (this.bodyRebuildPending);
+      if (this.bodyRebuildNotify) {
+        new Notice("Body-token index rebuilt.");
+      }
+    } catch (err) {
+      // Surface the failure instead of letting it become an unhandled
+      // rejection: silently swallowing it here would leave body matching
+      // inactive (built stays false on a first-run failure) with no signal
+      // to the user beyond a stuck "rebuilding…" state. Reported unconditionally
+      // (not gated on bodyRebuildNotify) since a first automatic/background
+      // rebuild failing is exactly the silent-until-now case this fixes.
+      console.error("Related Notes: body-token index rebuild failed", err);
+      new Notice(
+        `Body-token index rebuild failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       this.bodyIndexBuilding = false;
-    }
-    if (this.bodyRebuildNotify) {
       this.bodyRebuildNotify = false;
-      new Notice("Body-token index rebuilt.");
     }
     void this.refresh();
   }
@@ -366,6 +377,16 @@ export default class RelatedNotesPlugin extends Plugin {
       }
     });
     new Notice(`+#${tag}`);
+  }
+
+  // Lets a view request a render of the current active note outside the
+  // active-leaf-change flow — namely from its own onOpen, so a sidebar
+  // reopened on the same note it was showing before (which active-leaf-change
+  // won't re-trigger, since lastRefreshedPath is unchanged) doesn't stay
+  // stuck on the loading placeholder. refresh() doesn't consult
+  // lastRefreshedPath, so calling it here is always safe to repeat.
+  requestRefresh(): void {
+    void this.refresh();
   }
 
   async activateView(): Promise<void> {

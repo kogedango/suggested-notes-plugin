@@ -16,7 +16,8 @@ import { tokenize } from "../util/tokenize";
 // and the unbounded per-note token retention. The deliberate trade-off: a
 // recently-edited *other* note's body signal lags until the next rebuild.
 export class BodyTokenIndex {
-  // Corpus: per-note salient tokens (top-N by IDF), used for candidate notes.
+  // Corpus: per-note salient tokens (top-N by log(1+TF) * IDF), used for
+  // candidate notes.
   private salient = new Map<string, Set<string>>();
   // Corpus: token -> notes whose salient set contains it.
   private inverted = new Map<string, Set<string>>();
@@ -160,7 +161,7 @@ export class BodyTokenIndex {
   async rebuildAll(topN: number, segment: boolean): Promise<void> {
     const files = this.app.vault.getMarkdownFiles();
     const nextStandalone = new Set<string>();
-    const perFileTokens = new Map<string, Set<string>>();
+    const perFileTokens = new Map<string, Map<string, number>>();
 
     // Pass 1: one read AND one scan per note. Tokenize ungated (the standalone
     // set isn't complete yet, so interior sub-units can't be filtered here) and
@@ -170,10 +171,21 @@ export class BodyTokenIndex {
     for (let i = 0; i < files.length; i += CHUNK) {
       await Promise.all(
         files.slice(i, i + CHUNK).map(async (f) => {
-          const body = await this.app.vault.cachedRead(f);
-          const tokens = tokenize(body, segment, undefined, nextStandalone);
-          if (tokens.size === 0) return; // skip empty notes: they only dilute IDF
-          perFileTokens.set(f.path, tokens);
+          // A single file's read failing (permission error, race with a
+          // delete mid-rebuild, etc.) must not abort the whole rebuild — it
+          // just drops that note from this corpus generation, same as if it
+          // were empty. Errors are logged, not swallowed silently.
+          try {
+            const body = await this.app.vault.cachedRead(f);
+            const tokens = tokenize(body, segment, undefined, nextStandalone);
+            if (tokens.size === 0) return; // skip empty notes: they only dilute IDF
+            perFileTokens.set(f.path, tokens);
+          } catch (err) {
+            console.error(
+              `Related Notes: failed to read "${f.path}" during body-token rebuild, skipping it`,
+              err,
+            );
+          }
         }),
       );
       await yieldToEventLoop(); // keep large / mobile vaults responsive
@@ -185,9 +197,11 @@ export class BodyTokenIndex {
     // Gating in place avoids a second read of every note; it is equivalent to
     // tokenize()'s standalone gate — a full run is always in nextStandalone (it
     // was harvested above), so only never-standalone interior sub-units drop.
+    // df stays a presence count (0/1 per note) — TF (the per-note occurrence
+    // counts tokenize() returns) only feeds salience ranking below, never df.
     const nextDf = new Map<string, number>();
     for (const tokens of perFileTokens.values()) {
-      for (const t of tokens) {
+      for (const t of tokens.keys()) {
         if (isInteriorArtifact(t, nextStandalone)) {
           tokens.delete(t);
           continue;
@@ -240,24 +254,30 @@ function isInteriorArtifact(token: string, standalone: Set<string>): boolean {
   return false;
 }
 
-// Rank a token set by IDF against the given doc-freq table and keep the
-// top-N. Pure: used both for corpus builds (against the under-construction
-// df) and for live queries (against the current corpus df).
-function rankSalient(
-  tokens: Set<string>,
+// Rank a note's tokens (with their in-body occurrence counts) against the
+// given doc-freq table and keep the top-N by log(1+TF) * IDF, so a token the
+// note repeats beats an equally-rare token it only mentions once (design-
+// review-2026-07-02 #5) while df/IDF themselves stay presence-based (0/1 per
+// note) — TF only decides which tokens make the cut, not what "rare" means.
+// Pure: used both for corpus builds (against the under-construction df) and
+// for live queries (against the current corpus df). Exported for direct unit
+// testing of the ranking formula.
+export function rankSalient(
+  tokens: Map<string, number>,
   topN: number,
   df: Map<string, number>,
   totalNotes: number,
 ): Set<string> {
   const maxDf = Math.max(2, Math.floor(totalNotes * 0.4));
-  const ranked: Array<{ t: string; idf: number }> = [];
-  for (const t of tokens) {
+  const ranked: Array<{ t: string; score: number }> = [];
+  for (const [t, tf] of tokens) {
     const n = df.get(t) ?? 0;
     if (n < 2) continue; // singletons can't produce shared signal
     if (n > maxDf) continue; // stop-word-like
-    ranked.push({ t, idf: Math.log(totalNotes / n) });
+    const idf = Math.log(totalNotes / n);
+    ranked.push({ t, score: Math.log(1 + tf) * idf });
   }
-  ranked.sort((a, b) => b.idf - a.idf);
+  ranked.sort((a, b) => b.score - a.score);
 
   const set = new Set<string>();
   for (const r of ranked.slice(0, topN)) set.add(r.t);

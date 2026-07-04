@@ -206,10 +206,24 @@ describe("tokenize", () => {
     expect(out.has("end")).toBe(true);
   });
 
-  it("deduplicates repeated occurrences", () => {
+  it("deduplicates repeated occurrences (as distinct map keys)", () => {
     const out = tokenize("repeat repeat repeat");
     expect(out.size).toBe(1);
     expect(out.has("repeat")).toBe(true);
+  });
+
+  it("counts in-body occurrences per token (TF)", () => {
+    const out = tokenize("repeat repeat repeat once");
+    expect(out.get("repeat")).toBe(3);
+    expect(out.get("once")).toBe(1);
+  });
+
+  it("bumps a derived sub-unit's count once per occurrence of its parent run", () => {
+    // 機械学習 appears twice -> 機械/学習 (its 2-grams) are each bumped twice too.
+    const out = tokenize("機械学習の話。もう一度、機械学習について。");
+    expect(out.get("機械学習")).toBe(2);
+    expect(out.get("機械")).toBe(2);
+    expect(out.get("学習")).toBe(2);
   });
 
   it("NFKC-normalizes full-width ascii and half-width katakana", () => {

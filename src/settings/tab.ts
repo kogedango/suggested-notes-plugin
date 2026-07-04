@@ -29,6 +29,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     containerEl.createEl("p", {
       text:
         "Each shared signal contributes weight × IDF to the score. " +
+        "'Links to this note' is the exception — a flat weight (no IDF) for a single " +
+        "asymmetric link: the candidate links here, but this note doesn't link back yet. " +
         "The total is then divided by log(1 + outlinkCount) of the candidate to suppress MOC / index notes. " +
         "Same folder defaults to 0 — folder co-location often means 'filed together', not 'topically related'.",
       cls: "setting-item-description",
@@ -36,7 +38,12 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
 
     const weightSetting = (
       name: string,
-      key: "outlinkWeight" | "tagWeight" | "backlinkWeight" | "folderWeight",
+      key:
+        | "outlinkWeight"
+        | "tagWeight"
+        | "backlinkWeight"
+        | "directLinkWeight"
+        | "folderWeight",
     ) => {
       new Setting(containerEl).setName(name).addText((t) =>
         t.setValue(String(this.plugin.settings[key])).onChange(async (v) => {
@@ -51,6 +58,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     weightSetting("Shared outlinks", "outlinkWeight");
     weightSetting("Shared tags", "tagWeight");
     weightSetting("Shared backlinks", "backlinkWeight");
+    weightSetting("Links to this note", "directLinkWeight");
     weightSetting("Same folder", "folderWeight");
 
     containerEl.createEl("h3", { text: "Body-token matching" });

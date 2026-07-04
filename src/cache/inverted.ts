@@ -6,12 +6,15 @@ export class InvertedIndex {
   private tagIndex = new Map<string, Set<string>>();
   // outlink target path -> files linking to it
   private linkIndex = new Map<string, Set<string>>();
+  // folder -> files inside it (Item 7: candidate discovery for folderWeight)
+  private folderIndex = new Map<string, Set<string>>();
 
   constructor(private store: SnapshotReader) {}
 
   rebuild(): void {
     this.tagIndex.clear();
     this.linkIndex.clear();
+    this.folderIndex.clear();
     for (const snap of this.store.all()) this.add(snap);
   }
 
@@ -19,12 +22,14 @@ export class InvertedIndex {
     for (const tag of snap.tags) this.addTo(this.tagIndex, tag, snap.path);
     for (const link of snap.outlinks)
       this.addTo(this.linkIndex, link, snap.path);
+    this.addTo(this.folderIndex, snap.folder, snap.path);
   }
 
   remove(snap: FileSnapshot): void {
     for (const tag of snap.tags) this.removeFrom(this.tagIndex, tag, snap.path);
     for (const link of snap.outlinks)
       this.removeFrom(this.linkIndex, link, snap.path);
+    this.removeFrom(this.folderIndex, snap.folder, snap.path);
   }
 
   filesWithTag(tag: string): Set<string> {
@@ -33,6 +38,10 @@ export class InvertedIndex {
 
   filesLinkingTo(target: string): Set<string> {
     return this.linkIndex.get(target) ?? EMPTY;
+  }
+
+  filesInFolder(folder: string): Set<string> {
+    return this.folderIndex.get(folder) ?? EMPTY;
   }
 
   notesWithTagCount(tag: string): number {

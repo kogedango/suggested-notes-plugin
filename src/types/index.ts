@@ -4,6 +4,10 @@ export interface PluginSettings {
   outlinkWeight: number;
   tagWeight: number;
   backlinkWeight: number;
+  // Flat weight (no IDF) added when the candidate links to the active note
+  // but the active note doesn't link back — distinct from `backlinkWeight`,
+  // which scores *shared* backlinks (co-citation from a third note).
+  directLinkWeight: number;
   folderWeight: number;
 
   bodyTokenEnabled: boolean;
@@ -33,6 +37,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   outlinkWeight: 8,
   tagWeight: 5,
   backlinkWeight: 4,
+  directLinkWeight: 6,
   folderWeight: 0,
 
   bodyTokenEnabled: false,
@@ -66,6 +71,9 @@ export interface SharedReasons {
   sharedOutlinks: string[];
   sharedBacklinks: string[];
   sharedBodyTokens: string[];
+  // B links to A (the active note) but A doesn't link back yet. Distinct
+  // from `sharedBacklinks` (co-citation from a third note).
+  linksToActive: boolean;
 }
 
 export interface ScoredCandidate {

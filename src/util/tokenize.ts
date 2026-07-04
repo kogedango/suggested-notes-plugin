@@ -75,21 +75,29 @@ function strip(body: string): string {
 // from the same scan (a length-2 kanji run, a whole katakana word). This folds
 // what used to be a separate corpus pass into tokenize's single matchAll, so a
 // rebuild reads and scans each note once. Frozen per rebuild, exactly like df.
+//
+// Returns a token -> in-body occurrence count map (not a Set): salience
+// ranking weights by log(1+TF) so a note's genuinely recurring vocabulary
+// beats a rare word mentioned once (design-review-2026-07-02 #5). A derived
+// sub-unit (a kanji 2-gram, a katakana sub-word) is bumped once per occurrence
+// of its *parent run* — i.e. once per matchAll hit that produces it, same as
+// the full run — not per corpus document; df/IDF (computed by the caller) stay
+// presence-based (0/1 per note) and are unaffected by this change.
 export function tokenize(
   body: string,
   segment = false,
   standalone?: Set<string>,
   collectStandaloneInto?: Set<string>,
-): Set<string> {
+): Map<string, number> {
   const stripped = strip(body);
 
-  const out = new Set<string>();
+  const out = new Map<string, number>();
   for (const m of stripped.matchAll(TOKEN_RE)) {
     const tok = m[0];
     const first = tok[0];
     if (/[A-Za-z]/.test(first)) {
       const low = tok.toLowerCase();
-      if (!ASCII_STOPWORDS.has(low)) out.add(low);
+      if (!ASCII_STOPWORDS.has(low)) bump(out, low);
     } else if (/[ァ-ヶー]/.test(first)) {
       addKatakanaRun(out, tok, standalone, collectStandaloneInto);
     } else {
@@ -98,6 +106,10 @@ export function tokenize(
   }
   if (segment) addSegmented(out, stripped);
   return out;
+}
+
+function bump(out: Map<string, number>, key: string): void {
+  out.set(key, (out.get(key) ?? 0) + 1);
 }
 
 // Long-vowel spelling variants (サーバ/サーバー, ユーザ/ユーザー) should match,
@@ -120,14 +132,14 @@ function normalizeKatakana(tok: string): string | null {
 // length-gated (KATAKANA_SUBWORD_MIN) since short fragments are mostly noise.
 // Without the set (no corpus yet) every sub-word is emitted, the pre-gate path.
 function addKatakanaRun(
-  out: Set<string>,
+  out: Map<string, number>,
   run: string,
   standalone?: Set<string>,
   collectInto?: Set<string>,
 ): void {
   const full = normalizeKatakana(run);
   if (!full) return;
-  out.add(full);
+  bump(out, full);
   // The full run stood alone here, so it is itself a standalone katakana word —
   // harvest it so longer runs elsewhere can split on it.
   if (collectInto) collectInto.add(full);
@@ -136,7 +148,7 @@ function addKatakanaRun(
     for (let j = i + KATAKANA_SUBWORD_MIN; j <= run.length; j++) {
       const sub = normalizeKatakana(run.slice(i, j));
       if (!sub || sub.length < KATAKANA_SUBWORD_MIN || sub === full) continue;
-      if (!standalone || standalone.has(sub)) out.add(sub);
+      if (!standalone || standalone.has(sub)) bump(out, sub);
     }
   }
 }
@@ -156,17 +168,17 @@ function addKatakanaRun(
 // don't). The full run is always kept. Without the set (no corpus yet) every
 // 2-gram is emitted.
 function addKanjiRun(
-  out: Set<string>,
+  out: Map<string, number>,
   run: string,
   standalone?: Set<string>,
   collectInto?: Set<string>,
 ): void {
-  out.add(run);
+  bump(out, run);
   // A length-2 kanji run standing on its own is our standalone-word proxy.
   if (collectInto && run.length === 2) collectInto.add(run);
   for (let i = 0; i + 2 <= run.length; i++) {
     const bg = run.slice(i, i + 2);
-    if (!standalone || standalone.has(bg)) out.add(bg);
+    if (!standalone || standalone.has(bg)) bump(out, bg);
   }
 }
 
@@ -175,7 +187,7 @@ let segmenter: TinySegmenter | null = null;
 // Only the gap the regex pass cannot see is taken from the segmenter output:
 // kanji+hiragana mixed words and hiragana-only words. ASCII / katakana /
 // kanji-run segments are already covered (with their own normalization) above.
-function addSegmented(out: Set<string>, stripped: string): void {
+function addSegmented(out: Map<string, number>, stripped: string): void {
   if (!segmenter) segmenter = new TinySegmenter();
   for (const seg of segmenter.segment(stripped)) {
     const hasKanji = /[一-龥々]/.test(seg);
@@ -185,11 +197,11 @@ function addSegmented(out: Set<string>, stripped: string): void {
     // are high-df noise (~10% of the segmenter's df mass). Drop them outright.
     if (seg.endsWith("っ")) continue;
     if (hasKanji && hasHira && seg.length >= 2) {
-      out.add(seg);
+      bump(out, seg);
     } else if (hasHira && !hasKanji && /^[ぁ-んー]+$/.test(seg)) {
       // Hiragana-only words need a higher bar: most short ones are function
       // words, so require length >= 3 and not a known filler.
-      if (seg.length >= 3 && !JA_STOPWORDS.has(seg)) out.add(seg);
+      if (seg.length >= 3 && !JA_STOPWORDS.has(seg)) bump(out, seg);
     }
   }
 }
