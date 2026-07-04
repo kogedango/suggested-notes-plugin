@@ -168,6 +168,8 @@ export class ScoringEngine {
   // from the list does not drop its tags from suggestions.
   // Filters: must appear in >=2 pool notes AND have global df >=3
   // (kills typos and one-off tags).
+  // `limit` (12) caps the chip row so the tags section stays a glanceable
+  // strip above the results list; deliberately not a user setting.
   suggestTags(
     activePath: string,
     pool: ScoredCandidate[],
