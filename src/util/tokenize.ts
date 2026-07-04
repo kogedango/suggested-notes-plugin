@@ -33,6 +33,31 @@ const JA_STOPWORDS = new Set([
   "なけれ", "ださい", "といけ", "でしょ",
 ]);
 
+// Kanji+hiragana mixed segments the segmenter emits that carry no topical
+// signal, measured over the owner's vault (1.3k notes, 2026-07, df 19-121 —
+// far under the 40%-of-vault df cap, so the cap never catches them). Two
+// shapes, both the mixed-script analogue of the hiragana entries above:
+// conjugation fragments (調べ→調べた, 読ん→読んだ, 気づい→気づいた) and generic
+// dictionary-form verbs/adjectives (使う, 多い, 新しい). Nominalized ren'yōkei
+// nouns are deliberately NOT listed (学び, 動き, 考え, 楽しみ, 答え, 違い,
+// 見通し…): those are real PKM vocabulary — except 読み/書き, which in a
+// note-taking vault are as generic as the verbs they come from.
+const JA_MIXED_STOPWORDS = new Set([
+  "感じ", "調べ", "読ん", "書い", "使う", "向け", "同じ", "少し", "新しい",
+  "大きな", "思う", "知ら", "学ん", "使わ", "初めて", "受け", "多く", "高い",
+  "書く", "覚え", "読み", "多い", "聞い", "入れ", "借り", "好き", "読め",
+  "続き", "進め", "特に", "改め", "読む", "見つけ", "書か", "始め", "使い",
+  "に対し", "使える", "見る", "増え", "続い", "使え", "求め", "投げ", "出し",
+  "食べ", "言う", "通り", "作る", "関する", "一つ", "変え", "行く", "嬉しい",
+  "難しい", "考える", "含む", "決め", "行わ", "明らか", "示す", "済み",
+  "変わる", "出る", "大きく", "強い", "与え", "詳しく", "進ん", "強く",
+  "入り", "続く", "続け", "与える", "入れる", "忘れ", "感じる", "言わ",
+  "持つ", "良い", "行う", "報じ", "気づい", "付き", "入る", "求める",
+  "新しく", "残し", "見え", "近く", "当たり", "示し", "彼ら", "合わせ",
+  "迎え", "起き", "探し", "書き", "周り", "分かり", "確か", "集め", "新た",
+  "付け", "応じ", "加え", "買い",
+]);
+
 // Interior katakana sub-words shorter than this are dropped: 2-char katakana
 // sub-strings of a longer run are dominated by cross-morpheme noise (ブログ→ログ,
 // コンパス→パス, リバース→バー) and the real 2-char words are already captured when
@@ -53,7 +78,15 @@ function strip(body: string): string {
     .replace(/!\[\[[^\]]*\]\]/g, " ")
     .replace(/\[\[[^\]]*\]\]/g, " ")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, " $1 ")
-    .replace(/(^|[\s(])#[\p{L}\p{N}_\-/]+/gu, " ");
+    // Bare URLs in prose. Must run after the markdown-link rule (or it would
+    // eat the ")" out of "[text](url)"), and must stop at non-ASCII: Japanese
+    // prose puts text right after a URL with no space (詳細はhttps://…を参照),
+    // so \S+ would swallow the rest of the sentence.
+    .replace(/https?:\/\/[!-~]+/g, " ")
+    // Obsidian tags may START with digits (#2024振り返り) but can't be digits
+    // only, so require at least one letter/underscore somewhere — a bare "#1"
+    // is an issue reference, not a tag.
+    .replace(/(^|[\s(])#(?=[\p{N}\-/]*[\p{L}_])[\p{L}\p{N}_\-/]+/gu, " ");
 }
 
 // `segment` (experimental, corresponds to the bodyTokenSegmenterEnabled
@@ -178,6 +211,9 @@ function addKanjiRun(
   if (collectInto && run.length === 2) collectInto.add(run);
   for (let i = 0; i + 2 <= run.length; i++) {
     const bg = run.slice(i, i + 2);
+    // A 2-char run is its own only 2-gram — already bumped as the full run
+    // above (mirrors the katakana path's `sub === full` guard).
+    if (bg === run) continue;
     if (!standalone || standalone.has(bg)) bump(out, bg);
   }
 }
@@ -197,7 +233,11 @@ function addSegmented(out: Map<string, number>, stripped: string): void {
     // are high-df noise (~10% of the segmenter's df mass). Drop them outright.
     if (seg.endsWith("っ")) continue;
     if (hasKanji && hasHira && seg.length >= 2) {
-      bump(out, seg);
+      // Mixed segments need their own stopword set: conjugation fragments and
+      // generic verbs sit far under the corpus df cap, and JA_STOPWORDS is
+      // hiragana-only. A length gate doesn't work here — real nominalized
+      // 2-char words exist (学び, 問い) while 4-char fragments do too (早く起き).
+      if (!JA_MIXED_STOPWORDS.has(seg)) bump(out, seg);
     } else if (hasHira && !hasKanji && /^[ぁ-んー]+$/.test(seg)) {
       // Hiragana-only words need a higher bar: most short ones are function
       // words, so require length >= 3 and not a known filler.

@@ -218,6 +218,53 @@ describe("tokenize", () => {
     expect(out.get("once")).toBe(1);
   });
 
+  it("counts a 2-char kanji run once, not as full run plus its own 2-gram", () => {
+    // A length-2 run IS its only 2-gram; without the guard the TF doubled,
+    // biasing salience toward 2-char kanji words.
+    expect(tokenize("関連").get("関連")).toBe(1);
+    expect(tokenize("関連の話。また関連について。").get("関連")).toBe(2);
+  });
+
+  it("strips bare URLs without eating adjacent Japanese text", () => {
+    // Japanese prose puts text right after a URL with no space — the URL must
+    // go, the surrounding sentence must survive.
+    const out = tokenize("詳細はhttps://example.com/wiki/秘密pathを参照。手順は明日");
+    expect(out.has("example")).toBe(false);
+    expect(out.has("wiki")).toBe(false);
+    expect(out.has("詳細")).toBe(true);
+    expect(out.has("手順")).toBe(true);
+    expect(out.has("明日")).toBe(true);
+  });
+
+  it("still strips digit-leading tags (valid in Obsidian) after the digits-only fix", () => {
+    // #2024レビュー is a valid tag — the tag regex requires "contains a
+    // letter", NOT "starts with a letter", or レビュー would leak as a token.
+    // A digits-only "#1" is an issue reference, not a tag, and is left alone.
+    const out = tokenize("見た #2024レビュー と issue #1 の話");
+    // (レビュー would surface as レビュ after prolonged-mark normalization)
+    expect(out.has("レビュ")).toBe(false);
+    expect(out.has("issue")).toBe(true);
+  });
+
+  it("segmenter mode drops mixed-script conjugation fragments and generic verbs", () => {
+    const seg = tokenize("毎日ご飯を食べた。早く起きた。本を読んだ", true);
+    expect(seg.has("食べ")).toBe(false);
+    expect(seg.has("起き")).toBe(false);
+    expect(seg.has("読ん")).toBe(false);
+  });
+
+  it("segmenter mode keeps nominalized mixed-script nouns", () => {
+    // 学び / 問い are real 2-char PKM vocabulary — a blanket length gate would
+    // kill them, which is why the mixed branch uses a stopword set instead.
+    const seg = tokenize("読書からの学びを記録する。この問いに向き合う", true);
+    expect(seg.has("学び")).toBe(true);
+    expect(seg.has("問い")).toBe(true);
+    // longer okurigana compounds keep working
+    const seg2 = tokenize("設定の読み込みと打ち合わせの記録", true);
+    expect(seg2.has("読み込み")).toBe(true);
+    expect(seg2.has("打ち合わせ")).toBe(true);
+  });
+
   it("bumps a derived sub-unit's count once per occurrence of its parent run", () => {
     // 機械学習 appears twice -> 機械/学習 (its 2-grams) are each bumped twice too.
     const out = tokenize("機械学習の話。もう一度、機械学習について。");
