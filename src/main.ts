@@ -235,7 +235,7 @@ export default class RelatedNotesPlugin extends Plugin {
       // to the user beyond a stuck "rebuilding…" state. Reported unconditionally
       // (not gated on bodyRebuildNotify) since a first automatic/background
       // rebuild failing is exactly the silent-until-now case this fixes.
-      console.error("Related Notes: body-token index rebuild failed", err);
+      console.error("Suggested Notes: body-token index rebuild failed", err);
       new Notice(
         `Body-token index rebuild failed: ${err instanceof Error ? err.message : String(err)}`,
       );

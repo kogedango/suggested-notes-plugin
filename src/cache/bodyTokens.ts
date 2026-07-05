@@ -182,7 +182,7 @@ export class BodyTokenIndex {
             perFileTokens.set(f.path, tokens);
           } catch (err) {
             console.error(
-              `Related Notes: failed to read "${f.path}" during body-token rebuild, skipping it`,
+              `Suggested Notes: failed to read "${f.path}" during body-token rebuild, skipping it`,
               err,
             );
           }
