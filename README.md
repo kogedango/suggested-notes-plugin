@@ -96,6 +96,10 @@ When enabled, it reads every `.md` once to build a whole-vault index (~10–20s 
 
 To fully hide a class of notes, put them in a folder and exclude that folder.
 
+### Built-in stopwords
+
+The stopwords baked into body-token matching live in [`src/data/stopwords.ts`](./src/data/stopwords.ts). Every entry must belong to a vault-independent rationale category (closed-class grammar, basic JLPT vocabulary, conjugation fragments, pronouns, URL fragments, honorific suffixes) — no vault- or domain-specific word belongs there. If a word is common in *your* vault but not in general, add it to the **Excluded body tokens** setting instead. Suggestions for the built-in list are welcome via [GitHub issue or PR](https://github.com/kogedango/suggested-notes-plugin).
+
 ## License
 
 MIT

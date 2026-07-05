@@ -96,6 +96,10 @@ BRAT は新しいリリースが出ると自動更新します。
 
 特定のノート群を完全に隠したい場合は、フォルダに分けて `excludedFolders` を使ってください。
 
+### 組み込みストップワード
+
+body-token マッチングの組み込みストップワードは [`src/data/stopwords.ts`](./src/data/stopwords.ts) にあります。全エントリはVault非依存の根拠カテゴリ(閉クラス文法・JLPT基礎語彙・活用断片・代名詞・URL断片・敬称接尾辞)に属する必要があり、特定Vault・特定ドメインの語は含めません。自分のVaultでだけ頻出する語は代わりに設定の **Excluded body tokens** に追加してください。組み込みリストへの提案は [GitHub の issue / PR](https://github.com/kogedango/suggested-notes-plugin) で受け付けています。
+
 ## ライセンス
 
 MIT

@@ -1,81 +1,20 @@
 import TinySegmenter from "tiny-segmenter";
+import {
+  ASCII_STOPWORDS,
+  JA_MIXED_STOPWORDS,
+  JA_STOPWORDS,
+  KANJI_STOPWORDS,
+} from "../data/stopwords";
 
 const TOKEN_RE = /[A-Za-z][A-Za-z0-9_\-]{2,}|[ァ-ヶー]{2,}|[一-龥々]{2,}/gu;
 
-const ASCII_STOPWORDS = new Set([
-  "the", "and", "for", "with", "from", "this", "that", "have", "are", "was",
-  "you", "your", "but", "not", "all", "any", "use", "using", "used", "can",
-  "will", "into", "out", "about", "they", "their", "them", "these", "those",
-  "http", "https", "www", "com", "org", "net",
-]);
-
-// Hiragana-only segments the segmenter emits that carry no topical signal.
-// Entries shorter than 3 chars are pointless (the length gate drops them).
-// The df cap (rankSalient) is meant to catch the rest, but it is tuned for
-// stop-word-*like* terms (df > 40% of the vault); high-frequency grammatical
-// patterns and conjugation fragments the segmenter produces sit well under
-// that (measured df 200-650 on a 3.6k-note vault) and leak through, so the
-// worst offenders are enumerated here. Conjugation *fragments* ending in the
-// sokuon っ are handled separately in addSegmented (っ never ends a real word).
-const JA_STOPWORDS = new Set([
-  "について", "として", "という", "といった", "ところ", "ように", "ような",
-  "これら", "それら", "ながら", "ください", "ました", "ません", "します",
-  "しよう", "できる", "できた", "なかった", "なった", "なって", "あった",
-  "あって", "いった", "しまった", "しまう", "そして", "しかし", "だから",
-  "なので", "けれど", "それで", "それでも", "でした", "でしょう", "ですが",
-  "だけど", "ばかり", "くらい", "ぐらい", "ちょっと", "やっぱり", "やはり",
-  "とても", "かなり", "あまり", "たくさん", "それぞれ", "ほとんど",
-  "いろいろ", "さまざま", "もちろん", "すべて", "ずっと", "もっと",
-  "きっと", "ちゃんと", "しっかり",
-  // High-df grammatical patterns / auxiliaries that slip past the df cap.
-  "による", "により", "によって", "における", "おける", "られる", "くれる",
-  "やすい", "やすく", "らしい", "ただし", "さらに", "たけど", "わから",
-  "なけれ", "ださい", "といけ", "でしょ",
-  // Plan B-3 (2026-07-05): cross-referenced against the union of the
-  // stopwords-iso/stopwords-ja and SlothLib public Japanese stopword lists,
-  // then filtered to this vault's measured df (tmp/b3-analysis.md §5/§6) to
-  // exclude anything carrying real PKM-topical content. Demonstrative
-  // pronouns, personal pronouns, generic quantifiers/conjunctions, and
-  // discourse fillers.
-  "あそこ", "あたり", "あちら", "あっち", "あなた", "いくつ", "おまえ",
-  "および", "かつて", "こちら", "こっち", "ごっちゃ", "ぜんぶ", "そちら",
-  "そっち", "ちゃん", "とおり", "どこか", "どちら", "どっか", "どっち",
-  "とともに", "において", "はじめ", "ひとつ", "みたい", "みなさん", "みんな",
-  "ものの", "わたし",
-]);
-
-// Kanji+hiragana mixed segments the segmenter emits that carry no topical
-// signal, measured over the owner's vault (1.3k notes, 2026-07, df 19-121 —
-// far under the 40%-of-vault df cap, so the cap never catches them). Two
-// shapes, both the mixed-script analogue of the hiragana entries above:
-// conjugation fragments (調べ→調べた, 読ん→読んだ, 気づい→気づいた) and generic
-// dictionary-form verbs/adjectives (使う, 多い, 新しい). Nominalized ren'yōkei
-// nouns are deliberately NOT listed (学び, 動き, 考え, 楽しみ, 答え, 違い,
-// 見通し…): those are real PKM vocabulary — except 読み/書き, which in a
-// note-taking vault are as generic as the verbs they come from.
-const JA_MIXED_STOPWORDS = new Set([
-  "感じ", "調べ", "読ん", "書い", "使う", "向け", "同じ", "少し", "新しい",
-  "大きな", "思う", "知ら", "学ん", "使わ", "初めて", "受け", "多く", "高い",
-  "書く", "覚え", "読み", "多い", "聞い", "入れ", "借り", "好き", "読め",
-  "続き", "進め", "特に", "改め", "読む", "見つけ", "書か", "始め", "使い",
-  "に対し", "使える", "見る", "増え", "続い", "使え", "求め", "投げ", "出し",
-  "食べ", "言う", "通り", "作る", "関する", "一つ", "変え", "行く", "嬉しい",
-  "難しい", "考える", "含む", "決め", "行わ", "明らか", "示す", "済み",
-  "変わる", "出る", "大きく", "強い", "与え", "詳しく", "進ん", "強く",
-  "入り", "続く", "続け", "与える", "入れる", "忘れ", "感じる", "言わ",
-  "持つ", "良い", "行う", "報じ", "気づい", "付き", "入る", "求める",
-  "新しく", "残し", "見え", "近く", "当たり", "示し", "彼ら", "合わせ",
-  "迎え", "起き", "探し", "書き", "周り", "分かり", "確か", "集め", "新た",
-  "付け", "応じ", "加え", "買い",
-  // Plan B-3 (2026-07-05): same public-list cross-reference as JA_STOPWORDS
-  // above, filtered to this vault's measured df (tmp/b3-analysis.md §5/§6).
-  // Grammatical postposition constructions (kanji+hiragana cousins of the
-  // already-listed による/により/によって/における) and temporal/directional
-  // connectives — not nominalized content nouns, so consistent with the
-  // 違い/学び/等 exclusion above.
-  "その後", "と共に", "に関する", "に対して", "に対する", "幾つ", "及び",
-  "向こう",
-]);
+// ASCII_STOPWORDS / JA_STOPWORDS / JA_MIXED_STOPWORDS / KANJI_STOPWORDS are
+// defined in src/data/stopwords.ts, organized by vault-independent rationale
+// category (closed-class grammar, JLPT basic vocabulary, conjugation
+// fragments, pronouns, URL fragments, honorific suffixes) — see that file's
+// header comment for the categorization rule and the audit trail
+// (tmp/b3b-audit.md, Plan B-3b). Vault-specific high-frequency words belong
+// in the user-facing `excludedBodyTokens` setting, not in those sets.
 
 // Interior katakana sub-words shorter than this are dropped: 2-char katakana
 // sub-strings of a longer run are dominated by cross-morpheme noise (ブログ→ログ,
@@ -219,13 +158,21 @@ function addKatakanaRun(
 // only if they appear as a word on their own elsewhere (機械/学習 do; 械学/本語
 // don't). The full run is always kept. Without the set (no corpus yet) every
 // 2-gram is emitted.
+//
+// KANJI_STOPWORDS (src/data/stopwords.ts) additionally gates both the full
+// run and each 2-gram by exact match — a tiny closed-class list (personal
+// pronouns, 以-series relative-position compounds) with no plausible
+// domain-specific reading. This is the only JA vocabulary gate that has any
+// effect with bodyTokenSegmenterEnabled OFF (the default), since this
+// script-run path always runs regardless of that setting. The match is exact
+// only, so a longer run built on a gated unit (自分自身) still survives whole.
 function addKanjiRun(
   out: Map<string, number>,
   run: string,
   standalone?: Set<string>,
   collectInto?: Set<string>,
 ): void {
-  bump(out, run);
+  if (!KANJI_STOPWORDS.has(run)) bump(out, run);
   // A length-2 kanji run standing on its own is our standalone-word proxy.
   if (collectInto && run.length === 2) collectInto.add(run);
   for (let i = 0; i + 2 <= run.length; i++) {
@@ -233,6 +180,7 @@ function addKanjiRun(
     // A 2-char run is its own only 2-gram — already bumped as the full run
     // above (mirrors the katakana path's `sub === full` guard).
     if (bg === run) continue;
+    if (KANJI_STOPWORDS.has(bg)) continue;
     if (!standalone || standalone.has(bg)) bump(out, bg);
   }
 }

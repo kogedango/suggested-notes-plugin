@@ -319,4 +319,58 @@ describe("tokenize", () => {
     expect(out.has("関連")).toBe(true);
     expect(out.has("機能")).toBe(true);
   });
+
+  describe("KANJI_STOPWORDS gate (B-4)", () => {
+    it("drops 自分 and 以下 with the segmenter off (the default)", () => {
+      const out = tokenize("自分の意見は以下の通り");
+      expect(out.has("自分")).toBe(false);
+      expect(out.has("以下")).toBe(false);
+    });
+
+    it("drops 自分 and 以下 with the segmenter on too", () => {
+      // The gate lives on the always-on kanji-run regex path, not the
+      // segmenter path, so toggling bodyTokenSegmenterEnabled must not
+      // change this outcome.
+      const out = tokenize("自分の意見は以下の通り", true);
+      expect(out.has("自分")).toBe(false);
+      expect(out.has("以下")).toBe(false);
+    });
+
+    it("keeps 時間/場合/方法 (deliberately out of scope)", () => {
+      // These have both a functional use (formal-noun-like: 〜する場合,
+      // 〜する方法, 〜の時間) and a genuine content-word use (時間管理,
+      // 場合分け, 方法論) — unlike KANJI_STOPWORDS's closed-class entries,
+      // so they are intentionally not gated.
+      const out = tokenize("会議の時間を確認する。この場合の対処方法");
+      expect(out.has("時間")).toBe(true);
+      expect(out.has("場合")).toBe(true);
+      expect(out.has("方法")).toBe(true);
+    });
+
+    it("keeps 彼女 (excluded from KANJI_STOPWORDS on purpose)", () => {
+      // 彼女 has a lexicalized noun sense ("girlfriend") beyond the pronoun
+      // sense, unlike 彼ら/自分/我々/私達/貴方, so it is not gated.
+      const out = tokenize("彼女と話した");
+      expect(out.has("彼女")).toBe(true);
+    });
+
+    it("keeps the full run when a longer run merely contains a gated unit", () => {
+      // The gate is exact-match only: 自分自身 is not itself a KANJI_STOPWORDS
+      // entry, so the full run survives even though its 自分 2-gram is gated.
+      const out = tokenize("自分自身を見つめ直す");
+      expect(out.has("自分自身")).toBe(true);
+      expect(out.has("自分")).toBe(false);
+    });
+
+    it("keeps representative examples of the 16 audit-purged JA_MIXED_STOPWORDS entries", () => {
+      // Plan B-3b (tmp/b3b-audit.md) removed these from JA_MIXED_STOPWORDS
+      // because their ren'yōkei form lexicalizes into real, potentially
+      // topical vocabulary in some domain (受け=武道, 読み=将棋・囲碁,
+      // 買い=金融). They must now survive the segmenter's mixed-segment path.
+      const seg = tokenize("柔道の受けを覚える。将棋の読みが深い。株の買いを検討する", true);
+      expect(seg.has("受け")).toBe(true);
+      expect(seg.has("読み")).toBe(true);
+      expect(seg.has("買い")).toBe(true);
+    });
+  });
 });
