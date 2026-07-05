@@ -31,6 +31,17 @@ const JA_STOPWORDS = new Set([
   "による", "により", "によって", "における", "おける", "られる", "くれる",
   "やすい", "やすく", "らしい", "ただし", "さらに", "たけど", "わから",
   "なけれ", "ださい", "といけ", "でしょ",
+  // Plan B-3 (2026-07-05): cross-referenced against the union of the
+  // stopwords-iso/stopwords-ja and SlothLib public Japanese stopword lists,
+  // then filtered to this vault's measured df (tmp/b3-analysis.md §5/§6) to
+  // exclude anything carrying real PKM-topical content. Demonstrative
+  // pronouns, personal pronouns, generic quantifiers/conjunctions, and
+  // discourse fillers.
+  "あそこ", "あたり", "あちら", "あっち", "あなた", "いくつ", "おまえ",
+  "および", "かつて", "こちら", "こっち", "ごっちゃ", "ぜんぶ", "そちら",
+  "そっち", "ちゃん", "とおり", "どこか", "どちら", "どっか", "どっち",
+  "とともに", "において", "はじめ", "ひとつ", "みたい", "みなさん", "みんな",
+  "ものの", "わたし",
 ]);
 
 // Kanji+hiragana mixed segments the segmenter emits that carry no topical
@@ -56,6 +67,14 @@ const JA_MIXED_STOPWORDS = new Set([
   "新しく", "残し", "見え", "近く", "当たり", "示し", "彼ら", "合わせ",
   "迎え", "起き", "探し", "書き", "周り", "分かり", "確か", "集め", "新た",
   "付け", "応じ", "加え", "買い",
+  // Plan B-3 (2026-07-05): same public-list cross-reference as JA_STOPWORDS
+  // above, filtered to this vault's measured df (tmp/b3-analysis.md §5/§6).
+  // Grammatical postposition constructions (kanji+hiragana cousins of the
+  // already-listed による/により/によって/における) and temporal/directional
+  // connectives — not nominalized content nouns, so consistent with the
+  // 違い/学び/等 exclusion above.
+  "その後", "と共に", "に関する", "に対して", "に対する", "幾つ", "及び",
+  "向こう",
 ]);
 
 // Interior katakana sub-words shorter than this are dropped: 2-char katakana

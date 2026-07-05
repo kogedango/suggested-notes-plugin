@@ -253,6 +253,37 @@ describe("tokenize", () => {
     expect(seg.has("読ん")).toBe(false);
   });
 
+  it("segmenter mode drops plan B-3 hiragana stopword additions", () => {
+    const seg = tokenize("こちらの資料をちゃんと確認して。みんなで進めよう", true);
+    expect(seg.has("こちら")).toBe(false);
+    expect(seg.has("ちゃん")).toBe(false);
+    expect(seg.has("みんな")).toBe(false);
+  });
+
+  it("segmenter mode drops plan B-3 mixed-script stopword additions", () => {
+    const seg = tokenize("会議の内容に対する意見と、その後の対応について", true);
+    expect(seg.has("に対する")).toBe(false);
+    expect(seg.has("その後")).toBe(false);
+  });
+
+  it("segmenter mode keeps held-back real vocabulary despite public stopword lists", () => {
+    // 違い/扱い are real PKM content (nominalized verb forms) and were
+    // deliberately NOT added in plan B-3 — see the JA_MIXED_STOPWORDS comment.
+    const seg = tokenize("AとBの違いを整理する。データの扱いを見直す", true);
+    expect(seg.has("違い")).toBe(true);
+    expect(seg.has("扱い")).toBe(true);
+    // 半ば is held back too (progress-note vocabulary: 道半ば, 任期半ば), while
+    // はじめ IS dropped for notation consistency with the already-listed 始め.
+    const segHeld = tokenize("任期の半ばで退任した。はじめに結論を書く", true);
+    expect(segHeld.has("半ば")).toBe(true);
+    expect(segHeld.has("はじめ")).toBe(false);
+    // existing nominalized vocabulary must keep surviving too.
+    const seg2 = tokenize("読書からの学びを記録する。この問いに向き合う。設定の読み込み", true);
+    expect(seg2.has("学び")).toBe(true);
+    expect(seg2.has("問い")).toBe(true);
+    expect(seg2.has("読み込み")).toBe(true);
+  });
+
   it("segmenter mode keeps nominalized mixed-script nouns", () => {
     // 学び / 問い are real 2-char PKM vocabulary — a blanket length gate would
     // kill them, which is why the mixed branch uses a stopword set instead.
