@@ -1,4 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { t } from "../i18n";
 import type RelatedNotesPlugin from "../main";
 import { parseListInput } from "../util/list";
 
@@ -16,8 +17,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       this.plugin.invalidateAll();
     };
 
-    new Setting(containerEl).setName("Max results").addText((t) =>
-      t.setValue(String(this.plugin.settings.maxResults)).onChange(async (v) => {
+    new Setting(containerEl).setName(t("settingMaxResults")).addText((c) =>
+      c.setValue(String(this.plugin.settings.maxResults)).onChange(async (v) => {
         const n = parseInt(v, 10);
         if (!isNaN(n) && n > 0) {
           this.plugin.settings.maxResults = n;
@@ -26,14 +27,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       }),
     );
 
-    containerEl.createEl("h3", { text: "Weights" });
+    containerEl.createEl("h3", { text: t("settingWeightsHeading") });
     containerEl.createEl("p", {
-      text:
-        "Each shared signal contributes weight × IDF to the score. " +
-        "'Links to this note' is the exception — a flat weight (no IDF) for a single " +
-        "asymmetric link: the candidate links here, but this note doesn't link back yet. " +
-        "The total is then divided by log(1 + outlinkCount) of the candidate to suppress MOC / index notes. " +
-        "Same folder defaults to 0 — folder co-location often means 'filed together', not 'topically related'.",
+      text: t("settingWeightsDesc"),
       cls: "setting-item-description",
     });
 
@@ -46,8 +42,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         | "directLinkWeight"
         | "folderWeight",
     ) => {
-      new Setting(containerEl).setName(name).addText((t) =>
-        t.setValue(String(this.plugin.settings[key])).onChange(async (v) => {
+      new Setting(containerEl).setName(name).addText((c) =>
+        c.setValue(String(this.plugin.settings[key])).onChange(async (v) => {
           const n = parseFloat(v);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings[key] = n;
@@ -56,28 +52,22 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         }),
       );
     };
-    weightSetting("Shared outlinks", "outlinkWeight");
-    weightSetting("Shared tags", "tagWeight");
-    weightSetting("Shared backlinks", "backlinkWeight");
-    weightSetting("Links to this note", "directLinkWeight");
-    weightSetting("Same folder", "folderWeight");
+    weightSetting(t("weightOutlinks"), "outlinkWeight");
+    weightSetting(t("weightTags"), "tagWeight");
+    weightSetting(t("weightBacklinks"), "backlinkWeight");
+    weightSetting(t("weightDirectLink"), "directLinkWeight");
+    weightSetting(t("weightFolder"), "folderWeight");
 
-    containerEl.createEl("h3", { text: "Body-token matching" });
+    containerEl.createEl("h3", { text: t("settingBodyTokenHeading") });
     containerEl.createEl("p", {
-      text:
-        "Optional. Picks up notes that share rare vocabulary even without explicit tags or links. " +
-        "Off by default: enabling reads every .md file once (async, ~10–20s for 5,000 notes) to build the index. " +
-        "The active note is always re-read live, and an edited note's index entry updates as soon as the edit settles (~2s). " +
-        "Whole-vault statistics rebuild lazily (~1 min after edits settle), " +
-        "or immediately via the Rebuild button below / 'Rebuild body-token index' command. " +
-        "For Japanese vaults, also enable Japanese word segmentation below.",
+      text: t("settingBodyTokenDesc"),
       cls: "setting-item-description",
     });
 
     new Setting(containerEl)
-      .setName("Enable body-token matching")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.bodyTokenEnabled).onChange(async (v) => {
+      .setName(t("settingBodyTokenEnable"))
+      .addToggle((c) =>
+        c.setValue(this.plugin.settings.bodyTokenEnabled).onChange(async (v) => {
           this.plugin.settings.bodyTokenEnabled = v;
           await this.plugin.saveSettings();
           await this.plugin.rebuildBodyIndex();
@@ -85,15 +75,10 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Japanese word segmentation (recommended for Japanese vaults)")
-      .setDesc(
-        "Splits Japanese text into words with TinySegmenter (offline, no dictionary) " +
-          "so okurigana-mixed words like 打ち合わせ・読み込み and hiragana words like " +
-          "ひらめき also count as shared vocabulary — without this, such words are " +
-          "invisible to body-token matching. Changing this rebuilds the index.",
-      )
-      .addToggle((t) =>
-        t
+      .setName(t("settingSegmenterName"))
+      .setDesc(t("settingSegmenterDesc"))
+      .addToggle((c) =>
+        c
           .setValue(this.plugin.settings.bodyTokenSegmenterEnabled)
           .onChange(async (v) => {
             this.plugin.settings.bodyTokenSegmenterEnabled = v;
@@ -104,8 +89,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(containerEl).setName("Body-token weight").addText((t) =>
-      t
+    new Setting(containerEl).setName(t("settingBodyTokenWeight")).addText((c) =>
+      c
         .setValue(String(this.plugin.settings.bodyTokenWeight))
         .onChange(async (v) => {
           const n = parseFloat(v);
@@ -117,10 +102,10 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     );
 
     new Setting(containerEl)
-      .setName("Salient tokens per note")
-      .setDesc("Changing this rebuilds the index.")
-      .addText((t) =>
-        t
+      .setName(t("settingTopN"))
+      .setDesc(t("descRebuildsIndex"))
+      .addText((c) =>
+        c
           .setValue(String(this.plugin.settings.bodyTokenTopN))
           .onChange(async (v) => {
             const n = parseInt(v, 10);
@@ -135,16 +120,12 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Rebuild index now")
-      .setDesc(
-        "Re-reads every note and rebuilds the whole-vault statistics. " +
-          "Rarely needed: edited notes update on save, and statistics refresh " +
-          "automatically ~1 min after edits settle.",
-      )
+      .setName(t("settingRebuildNow"))
+      .setDesc(t("descRebuildNow"))
       .addButton((b) =>
-        b.setButtonText("Rebuild").onClick(async () => {
+        b.setButtonText(t("buttonRebuild")).onClick(async () => {
           if (!this.plugin.settings.bodyTokenEnabled) {
-            new Notice("Body-token matching is disabled.");
+            new Notice(t("noticeBodyTokenDisabled"));
             return;
           }
           b.setDisabled(true);
@@ -156,22 +137,21 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         }),
       );
 
-    containerEl.createEl("h3", { text: "Display" });
+    containerEl.createEl("h3", { text: t("settingDisplayHeading") });
     containerEl.createEl("p", {
-      text:
-        "Scores are per-query normalized (top match = 100) and not comparable across different active notes.",
+      text: t("descDisplayScores"),
       cls: "setting-item-description",
     });
 
-    new Setting(containerEl).setName("Show scores").addToggle((t) =>
-      t.setValue(this.plugin.settings.showScores).onChange(async (v) => {
+    new Setting(containerEl).setName(t("settingShowScores")).addToggle((c) =>
+      c.setValue(this.plugin.settings.showScores).onChange(async (v) => {
         this.plugin.settings.showScores = v;
         await save();
       }),
     );
 
-    new Setting(containerEl).setName("Show shared reasons").addToggle((t) =>
-      t
+    new Setting(containerEl).setName(t("settingShowSharedReasons")).addToggle((c) =>
+      c
         .setValue(this.plugin.settings.showSharedReasons)
         .onChange(async (v) => {
           this.plugin.settings.showSharedReasons = v;
@@ -179,8 +159,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         }),
     );
 
-    new Setting(containerEl).setName("Hide already-linked").addToggle((t) =>
-      t
+    new Setting(containerEl).setName(t("settingHideAlreadyLinked")).addToggle((c) =>
+      c
         .setValue(this.plugin.settings.hideAlreadyLinked)
         .onChange(async (v) => {
           this.plugin.settings.hideAlreadyLinked = v;
@@ -188,14 +168,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         }),
     );
 
-    containerEl.createEl("h3", { text: "Exclusions" });
+    containerEl.createEl("h3", { text: t("settingExclusionsHeading") });
     containerEl.createEl("p", {
-      text:
-        "Excluded folders and excluded tags/links behave differently. " +
-        "Folders: notes inside are removed from results entirely. " +
-        "Tags / links: only that signal is ignored during scoring — a note carrying an excluded tag can still appear if it matches via other signals. " +
-        "This lets you down-weight noisy tags without losing genuinely related notes that happen to use them. " +
-        "To fully hide a group of notes, put them in a folder and exclude that folder.",
+      text: t("descExclusions"),
       cls: "setting-item-description",
     });
 
@@ -214,8 +189,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName(name)
         .setDesc(desc)
-        .addTextArea((t) =>
-          t
+        .addTextArea((c) =>
+          c
             .setValue(this.plugin.settings[key].join("\n"))
             .onChange(async (v) => {
               this.plugin.settings[key] = parseListInput(v, splitCommas);
@@ -224,29 +199,26 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         );
     };
     listSetting(
-      "Excluded folders",
-      "One folder path per line. Both 'Daily/' and '/Daily' are accepted.",
+      t("settingExcludedFolders"),
+      t("descExcludedFolders"),
       "excludedFolders",
       false,
     );
     listSetting(
-      "Excluded tags",
-      "One tag per line or comma-separated, without the leading #.",
+      t("settingExcludedTags"),
+      t("descExcludedTags"),
       "excludedTags",
       true,
     );
     listSetting(
-      "Excluded links",
-      "One note basename per line (e.g. 'Linux', not '[[Linux]]').",
+      t("settingExcludedLinks"),
+      t("descExcludedLinks"),
       "excludedLinks",
       false,
     );
     listSetting(
-      "Excluded body-token words",
-      "One word per line or comma-separated. Recurring heading words you don't " +
-        "want to count as a shared body signal (e.g. コメント, 結果, メモ). " +
-        "Only used when body-token matching is on; takes effect immediately, " +
-        "no rebuild needed.",
+      t("settingExcludedBodyTokens"),
+      t("descExcludedBodyTokens"),
       "excludedBodyTokens",
       true,
     );

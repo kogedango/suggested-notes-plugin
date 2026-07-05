@@ -1,4 +1,5 @@
 import { ItemView, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { t } from "../i18n";
 import type RelatedNotesPlugin from "../main";
 import type { ScoredCandidate, SuggestedTag } from "../types";
 import { displayName } from "../util/path";
@@ -34,7 +35,7 @@ export class RelatedNotesView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Suggested Notes";
+    return t("viewName");
   }
 
   getIcon(): string {
@@ -117,19 +118,19 @@ export class RelatedNotesView extends ItemView {
     switch (this.state.kind) {
       case "loading":
         container.createEl("div", {
-          text: "Indexing vault…",
+          text: t("statusIndexing"),
           cls: "suggested-notes-status",
         });
         return;
       case "no-active":
         container.createEl("div", {
-          text: "Open a note to see related notes.",
+          text: t("statusNoActive"),
           cls: "suggested-notes-status",
         });
         return;
       case "empty":
         container.createEl("div", {
-          text: "No related notes found.",
+          text: t("statusEmpty"),
           cls: "suggested-notes-status",
         });
         return;
@@ -144,7 +145,7 @@ export class RelatedNotesView extends ItemView {
           // above differs, since suggestedTags is what kept us out of
           // "empty" in the first place.
           container.createEl("div", {
-            text: "No related notes found.",
+            text: t("statusEmpty"),
             cls: "suggested-notes-status",
           });
         } else {
@@ -165,7 +166,7 @@ export class RelatedNotesView extends ItemView {
   ): void {
     const section = container.createEl("div", { cls: "suggested-notes-section" });
     section.createEl("div", {
-      text: "Related notes",
+      text: t("sectionRelatedNotes"),
       cls: "suggested-notes-section-header",
     });
     const list = section.createEl("div", { cls: "suggested-notes-list" });
@@ -295,7 +296,7 @@ export class RelatedNotesView extends ItemView {
   ): void {
     const copyBtn = self.createEl("div", {
       cls: "clickable-icon suggested-notes-copy",
-      attr: { "aria-label": "Copy link" },
+      attr: { "aria-label": t("ariaCopyLink") },
     });
     setIcon(copyBtn, "copy");
     let copiedTimer: number | undefined;
@@ -325,7 +326,7 @@ export class RelatedNotesView extends ItemView {
   ): void {
     const addBtn = self.createEl("div", {
       cls: "clickable-icon suggested-notes-insert",
-      attr: { "aria-label": "Add link to note" },
+      attr: { "aria-label": t("ariaAddLink") },
     });
     setIcon(addBtn, "link");
     let addedTimer: number | undefined;
@@ -354,19 +355,24 @@ export class RelatedNotesView extends ItemView {
       cls: "suggested-notes-tags-section",
     });
     section.createEl("div", {
-      text: "Suggested tags",
+      text: t("sectionSuggestedTags"),
       cls: "suggested-notes-section-header",
     });
     const list = section.createEl("div", { cls: "suggested-notes-tags" });
-    for (const t of tags) {
+    for (const tag of tags) {
       const chip = list.createEl("a", {
         cls: "tag suggested-notes-tag",
-        text: `#${t.tag}`,
-        attr: { "aria-label": `Add #${t.tag} (${t.fromCount} notes)` },
+        text: `#${tag.tag}`,
+        attr: {
+          "aria-label": t("suggestAddTag", {
+            tag: tag.tag,
+            count: tag.fromCount,
+          }),
+        },
       });
       chip.addEventListener("click", (e) => {
         e.preventDefault();
-        this.plugin.addTagToActive(activePath, t.tag);
+        this.plugin.addTagToActive(activePath, tag.tag);
       });
     }
   }
@@ -385,7 +391,7 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
     parts.push(
       c.reasons.sharedTags
         .slice(0, 4)
-        .map((t) => `#${t}`)
+        .map((tag) => `#${tag}`)
         .join(" "),
     );
   }
@@ -398,16 +404,18 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
     );
   }
   if (c.reasons.linksToActive) {
-    parts.push("links to this note");
+    parts.push(t("reasonLinksToThisNote"));
   }
   if (c.reasons.sharedBacklinks.length) {
-    parts.push(`+${c.reasons.sharedBacklinks.length} shared backlink(s)`);
+    parts.push(
+      t("reasonSharedBacklinks", { count: c.reasons.sharedBacklinks.length }),
+    );
   }
   if (c.reasons.sharedBodyTokens.length) {
     parts.push(
       c.reasons.sharedBodyTokens
         .slice(0, 4)
-        .map((t) => `“${t}”`)
+        .map((tok) => `“${tok}”`)
         .join(" "),
     );
   }
@@ -441,36 +449,36 @@ function buildInfoTip(
   if (showReasons && c.reasons.sharedTags.length) {
     sections.push({
       icon: "tag",
-      label: "Shared tags",
-      values: c.reasons.sharedTags.map((t) => `#${t}`),
+      label: t("tipLabelSharedTags"),
+      values: c.reasons.sharedTags.map((tag) => `#${tag}`),
     });
   }
   if (showReasons && c.reasons.sharedOutlinks.length) {
     sections.push({
       icon: "links-going-out",
-      label: "Shared links",
+      label: t("tipLabelSharedLinks"),
       values: c.reasons.sharedOutlinks.map((l) => `[[${displayName(l)}]]`),
     });
   }
   if (showReasons && c.reasons.linksToActive) {
     sections.push({
       icon: "link",
-      label: "Links to this note",
-      values: ["Links here, not linked back yet"],
+      label: t("tipLabelLinksToThisNote"),
+      values: [t("tipLinksHereNotBack")],
     });
   }
   if (showReasons && c.reasons.sharedBacklinks.length) {
     sections.push({
       icon: "links-coming-in",
-      label: "Shared backlinks",
+      label: t("tipLabelSharedBacklinks"),
       values: c.reasons.sharedBacklinks.map((l) => `[[${displayName(l)}]]`),
     });
   }
   if (showReasons && c.reasons.sharedBodyTokens.length) {
     sections.push({
       icon: "text",
-      label: "Shared body words",
-      values: c.reasons.sharedBodyTokens.map((t) => `“${t}”`),
+      label: t("tipLabelSharedBodyWords"),
+      values: c.reasons.sharedBodyTokens.map((tok) => `“${tok}”`),
     });
   }
   if (sections.length) {

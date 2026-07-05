@@ -10,6 +10,7 @@ import {
 import { BodyTokenIndex } from "./cache/bodyTokens";
 import { InvertedIndex } from "./cache/inverted";
 import { MetadataStore } from "./cache/metadata";
+import { t } from "./i18n";
 import { ScoringEngine } from "./scoring";
 import { RelatedNotesSettingTab } from "./settings/tab";
 import { DEFAULT_SETTINGS, PluginSettings } from "./types";
@@ -49,7 +50,7 @@ export default class RelatedNotesPlugin extends Plugin {
     );
 
     this.registerHoverLinkSource(VIEW_TYPE_RELATED_NOTES, {
-      display: "Suggested Notes",
+      display: t("viewName"),
       // true = require the Cmd/Ctrl modifier to preview, matching Obsidian's
       // default link-hover behaviour (Page Preview owns the modifier gating
       // and its own hover delay). Obsidian's core "Page preview" plugin must
@@ -61,16 +62,16 @@ export default class RelatedNotesPlugin extends Plugin {
 
     this.addCommand({
       id: "open-suggested-notes",
-      name: "Open Suggested Notes sidebar",
+      name: t("commandOpenSidebar"),
       callback: () => this.activateView(),
     });
 
     this.addCommand({
       id: "rebuild-body-index",
-      name: "Rebuild body-token index",
+      name: t("commandRebuildIndex"),
       callback: () => {
         if (!this.settings.bodyTokenEnabled) {
-          new Notice("Body-token matching is disabled.");
+          new Notice(t("noticeBodyTokenDisabled"));
           return;
         }
         void this.rebuildBodyIndex();
@@ -226,7 +227,7 @@ export default class RelatedNotesPlugin extends Plugin {
         );
       } while (this.bodyRebuildPending);
       if (this.bodyRebuildNotify) {
-        new Notice("Body-token index rebuilt.");
+        new Notice(t("noticeBodyTokenRebuilt"));
       }
     } catch (err) {
       // Surface the failure instead of letting it become an unhandled
@@ -237,7 +238,9 @@ export default class RelatedNotesPlugin extends Plugin {
       // rebuild failing is exactly the silent-until-now case this fixes.
       console.error("Suggested Notes: body-token index rebuild failed", err);
       new Notice(
-        `Body-token index rebuild failed: ${err instanceof Error ? err.message : String(err)}`,
+        t("noticeBodyTokenRebuildFailed", {
+          message: err instanceof Error ? err.message : String(err),
+        }),
       );
     } finally {
       this.bodyIndexBuilding = false;
@@ -364,7 +367,7 @@ export default class RelatedNotesPlugin extends Plugin {
   async addTagToActive(activePath: string, tag: string): Promise<void> {
     const active = this.app.workspace.getActiveFile();
     if (!active || active.path !== activePath) {
-      new Notice("Active note has changed.");
+      new Notice(t("noticeActiveNoteChanged"));
       return;
     }
     await this.app.fileManager.processFrontMatter(active, (fm) => {
@@ -382,7 +385,7 @@ export default class RelatedNotesPlugin extends Plugin {
         fm.tags = [tag];
       }
     });
-    new Notice(`+#${tag}`);
+    new Notice(t("noticeTagAdded", { tag }));
   }
 
   // Lets a view request a render of the current active note outside the
@@ -433,7 +436,7 @@ export default class RelatedNotesPlugin extends Plugin {
   ): Promise<void> {
     const active = this.app.workspace.getActiveFile();
     if (!active || active.path !== activePath) {
-      new Notice("Active note has changed.");
+      new Notice(t("noticeActiveNoteChanged"));
       return;
     }
     const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
@@ -445,6 +448,6 @@ export default class RelatedNotesPlugin extends Plugin {
     await this.app.vault.process(active, (data) =>
       data.endsWith("\n") ? `${data}${link}\n` : `${data}\n${link}\n`,
     );
-    new Notice(`Added link to ${targetFile.basename}`);
+    new Notice(t("noticeLinkAdded", { name: targetFile.basename }));
   }
 }
