@@ -21,12 +21,27 @@ const EMPTY_TOKENS: Set<string> = new Set();
 
 const BODY_REBUILD_DEBOUNCE_MS = 60_000;
 
+// Wiring contract for anything that needs to track vault changes to stay
+// current (store/inverted index, body-token corpus, and eventually a title
+// index). Each hook is optional and independent — a layer that doesn't care
+// about deletes simply doesn't implement onDelete. `bodyMayHaveChanged`
+// distinguishes a real edit ("changed") from link resolution catching up
+// ("resolve"); a layer decides for itself whether that matters. Whether a
+// layer is active at all (e.g. body matching being off) is likewise the
+// layer's own call, not something the interface or the wiring loop encodes.
+interface CacheLayer {
+  onChanged?(file: TFile, bodyMayHaveChanged: boolean): void;
+  onDelete?(path: string): void;
+  onRename?(oldPath: string, file: TFile): void;
+}
+
 export default class RelatedNotesPlugin extends Plugin {
   settings!: PluginSettings;
   private store!: MetadataStore;
   private inverted!: InvertedIndex;
   private body!: BodyTokenIndex;
   private scoring!: ScoringEngine;
+  private cacheLayers: CacheLayer[] = [];
   private ready = false;
   private scheduleRefresh!: Debouncer<[], void>;
   private bodyIndexBuilding = false;
@@ -43,6 +58,7 @@ export default class RelatedNotesPlugin extends Plugin {
     this.inverted = new InvertedIndex(this.store);
     this.body = new BodyTokenIndex(this.app);
     this.scoring = new ScoringEngine(this.store, this.inverted, this.body);
+    this.cacheLayers = this.buildCacheLayers();
 
     this.registerView(
       VIEW_TYPE_RELATED_NOTES,
@@ -143,10 +159,7 @@ export default class RelatedNotesPlugin extends Plugin {
       this.app.vault.on("delete", (af: TAbstractFile) => {
         if (!(af instanceof TFile) || af.extension !== "md") return;
         if (!this.ready) return;
-        const snap = this.store.remove(af.path);
-        if (snap) this.inverted.remove(snap);
-        // No body re-read needed: text didn't change, just drop the entry.
-        this.body.remove(af.path);
+        for (const layer of this.cacheLayers) layer.onDelete?.(af.path);
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -156,11 +169,7 @@ export default class RelatedNotesPlugin extends Plugin {
       this.app.vault.on("rename", (af: TAbstractFile, oldPath: string) => {
         if (!(af instanceof TFile) || af.extension !== "md") return;
         if (!this.ready) return;
-        const { prev, next } = this.store.rename(oldPath, af);
-        if (prev) this.inverted.remove({ ...prev, path: oldPath });
-        this.inverted.add(next);
-        // No body re-read needed: text didn't change, just re-key the entry.
-        this.body.rename(oldPath, af.path);
+        for (const layer of this.cacheLayers) layer.onRename?.(oldPath, af);
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -274,31 +283,70 @@ export default class RelatedNotesPlugin extends Plugin {
     }
   }
 
+  // Wires up the cache layers once, at plugin load: the metadata
+  // store+inverted-index pair (always current when ready), and the
+  // body-token corpus (opt-in, debounced). Adding a new layer — e.g. a title
+  // index — is one more object in this array; the event handlers below don't
+  // change.
+  private buildCacheLayers(): CacheLayer[] {
+    return [
+      {
+        onChanged: (file) => {
+          const { prev, next } = this.store.update(file);
+          if (prev) this.inverted.remove(prev);
+          this.inverted.add(next);
+        },
+        onDelete: (path) => {
+          const snap = this.store.remove(path);
+          if (snap) this.inverted.remove(snap);
+        },
+        onRename: (oldPath, file) => {
+          const { prev, next } = this.store.rename(oldPath, file);
+          if (prev) this.inverted.remove({ ...prev, path: oldPath });
+          this.inverted.add(next);
+        },
+      },
+      {
+        // Only a real edit ("changed", not "resolve") and body matching
+        // being enabled trigger corpus work: the edited note's salient set is
+        // touched up right away (cheap, df untouched) so fresh text is
+        // discoverable from other notes immediately, and the lazy full
+        // rebuild is scheduled to refresh df. Delete/rename don't change note
+        // text, so they just re-key — and that re-keying is harmless even
+        // when body matching is off (a no-op if the path isn't indexed).
+        onChanged: (file, bodyMayHaveChanged) => {
+          if (!bodyMayHaveChanged || !this.settings.bodyTokenEnabled) return;
+          void this.body
+            .refreshNote(
+              file,
+              this.settings.bodyTokenTopN,
+              this.settings.bodyTokenSegmenterEnabled,
+            )
+            .then(() => this.scheduleRefresh());
+          this.scheduleBodyRebuild();
+        },
+        onDelete: (path) => {
+          // No body re-read needed: text didn't change, just drop the entry.
+          this.body.remove(path);
+        },
+        onRename: (oldPath, file) => {
+          // No body re-read needed: text didn't change, just re-key the entry.
+          this.body.rename(oldPath, file.path);
+        },
+      },
+    ];
+  }
+
   // Shared by the "changed" and "resolve" handlers: re-snapshot the file and
   // refresh. Only "changed" implies the body text moved — "resolve" is link
   // resolution catching up, and body tokens don't depend on resolvedLinks, so
   // it skips scheduling the (expensive) corpus rebuild.
   private reindexFile(file: TFile, bodyMayHaveChanged: boolean): void {
     if (!this.ready) return;
-    const { prev, next } = this.store.update(file);
-    if (prev) this.inverted.remove(prev);
-    this.inverted.add(next);
-    this.scoring.markDirty();
-    if (bodyMayHaveChanged && this.settings.bodyTokenEnabled) {
-      // Two corpus paths: the edited note's salient set is touched up right
-      // away (cheap, df untouched) so fresh text is discoverable from other
-      // notes immediately; the full rebuild stays a lazy backstop that
-      // refreshes df. The active note's own query tokens are read fresh at
-      // refresh time regardless.
-      void this.body
-        .refreshNote(
-          file,
-          this.settings.bodyTokenTopN,
-          this.settings.bodyTokenSegmenterEnabled,
-        )
-        .then(() => this.scheduleRefresh());
-      this.scheduleBodyRebuild();
+    for (const layer of this.cacheLayers) {
+      layer.onChanged?.(file, bodyMayHaveChanged);
     }
+    this.scoring.markDirty();
     this.scheduleRefresh();
   }
 

@@ -66,48 +66,67 @@ export class ScoringEngine {
 
     const candidates = new Set<string>();
 
-    for (const tag of active.tags) {
-      if (excludedTags.has(tag)) continue;
-      for (const p of this.inverted.filesWithTag(tag)) {
+    // Adds every file in `files` except the active note itself. Shared by
+    // every candidate source below, whether the files come straight from a
+    // set on the active note (backlinks, outlinks) or from an inverted-index
+    // lookup.
+    const addCandidates = (files: Iterable<string>): void => {
+      for (const p of files) {
         if (p !== activePath) candidates.add(p);
       }
-    }
-    for (const link of active.outlinks) {
-      if (excludedLinks.has(basename(link))) continue;
-      for (const p of this.inverted.filesLinkingTo(link)) {
-        if (p !== activePath) candidates.add(p);
+    };
+    // Shared shape for sources that fan out through an index: iterate the
+    // active note's own keys (tags / outlinks / body tokens / backlink
+    // sources), skip excluded/disqualified keys, and pull in whatever files
+    // that key maps to. A future signal (e.g. title tokens) is one more call
+    // to this, not a new loop shape.
+    const addCandidatesByKey = (
+      keys: Iterable<string>,
+      isExcluded: (key: string) => boolean,
+      filesForKey: (key: string) => Iterable<string>,
+    ): void => {
+      for (const key of keys) {
+        if (isExcluded(key)) continue;
+        addCandidates(filesForKey(key));
       }
-    }
-    for (const p of active.backlinks) candidates.add(p);
+    };
+
+    addCandidatesByKey(
+      active.tags,
+      (t) => excludedTags.has(t),
+      (t) => this.inverted.filesWithTag(t),
+    );
+    addCandidatesByKey(
+      active.outlinks,
+      (l) => excludedLinks.has(basename(l)),
+      (l) => this.inverted.filesLinkingTo(l),
+    );
+    addCandidates(active.backlinks);
     // Item 2: notes co-cited from a "focused" hub are discoverable even
     // without a shared tag/link of their own. A hub with too many outlinks
     // (MOC/index) is skipped; sharedBacklinks scoring (already weighted by
     // source specificity) naturally scores whatever surfaces here.
-    for (const src of active.backlinks) {
-      const source = this.store.get(src);
-      if (!source || source.outlinkCount > FOCUSED_SOURCE_MAX_OUTLINKS) continue;
-      for (const p of source.outlinks) {
-        if (p !== activePath) candidates.add(p);
-      }
-    }
-    for (const p of active.outlinks) {
-      if (p !== activePath) candidates.add(p);
-    }
+    addCandidatesByKey(
+      active.backlinks,
+      (src) => {
+        const source = this.store.get(src);
+        return !source || source.outlinkCount > FOCUSED_SOURCE_MAX_OUTLINKS;
+      },
+      (src) => this.store.get(src)!.outlinks,
+    );
+    addCandidates(active.outlinks);
     // Item 7: folderWeight only ever scored same-folder notes that were
     // already candidates via another signal; discover them directly, but
     // only when the setting is actually in use (default 0 -> no change).
     if (settings.folderWeight > 0) {
-      for (const p of this.inverted.filesInFolder(active.folder)) {
-        if (p !== activePath) candidates.add(p);
-      }
+      addCandidates(this.inverted.filesInFolder(active.folder));
     }
     if (useBody) {
-      for (const tok of activeBodyTokens) {
-        if (excludedBody.has(tok)) continue;
-        for (const p of this.body.filesWithToken(tok)) {
-          if (p !== activePath) candidates.add(p);
-        }
-      }
+      addCandidatesByKey(
+        activeBodyTokens,
+        (tok) => excludedBody.has(tok),
+        (tok) => this.body.filesWithToken(tok),
+      );
     }
 
     const scored: Array<{
