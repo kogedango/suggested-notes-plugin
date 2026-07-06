@@ -40,7 +40,8 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         | "tagWeight"
         | "backlinkWeight"
         | "directLinkWeight"
-        | "folderWeight",
+        | "folderWeight"
+        | "titleWeight",
     ) => {
       new Setting(containerEl).setName(name).addText((c) =>
         c.setValue(String(this.plugin.settings[key])).onChange(async (v) => {
@@ -57,6 +58,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     weightSetting(t("weightBacklinks"), "backlinkWeight");
     weightSetting(t("weightDirectLink"), "directLinkWeight");
     weightSetting(t("weightFolder"), "folderWeight");
+    weightSetting(t("weightTitle"), "titleWeight");
 
     containerEl.createEl("h3", { text: t("settingBodyTokenHeading") });
     containerEl.createEl("p", {

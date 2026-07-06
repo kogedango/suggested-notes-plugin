@@ -9,6 +9,10 @@ export interface PluginSettings {
   // which scores *shared* backlinks (co-citation from a third note).
   directLinkWeight: number;
   folderWeight: number;
+  // Weight per shared filename (title) token, applied like tagWeight/
+  // outlinkWeight (weight * IDF). Metadata-only, on by default — see
+  // cache/titleTokens.ts. No enable/disable toggle; set to 0 to turn it off.
+  titleWeight: number;
 
   bodyTokenEnabled: boolean;
   bodyTokenWeight: number;
@@ -39,6 +43,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   backlinkWeight: 4,
   directLinkWeight: 6,
   folderWeight: 0,
+  titleWeight: 3,
 
   bodyTokenEnabled: false,
   bodyTokenWeight: 1.5,
@@ -71,6 +76,7 @@ export interface SharedReasons {
   sharedOutlinks: string[];
   sharedBacklinks: string[];
   sharedBodyTokens: string[];
+  sharedTitleTokens: string[];
   // B links to A (the active note) but A doesn't link back yet. Distinct
   // from `sharedBacklinks` (co-citation from a third note).
   linksToActive: boolean;

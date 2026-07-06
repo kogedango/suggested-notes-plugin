@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BodyTokenIndex } from "../cache/bodyTokens";
 import { InvertedIndex } from "../cache/inverted";
 import { SnapshotStore } from "../cache/store";
+import { TitleTokenIndex } from "../cache/titleTokens";
 import type { FileSnapshot, PluginSettings } from "../types";
 import { DEFAULT_SETTINGS } from "../types";
 import { ScoringEngine } from "./index";
@@ -37,7 +38,12 @@ function engine(snaps: FileSnapshot[]): ScoringEngine {
   store.rebuildAll(snaps);
   const inverted = new InvertedIndex(store);
   inverted.rebuild();
-  return new ScoringEngine(store, inverted, noBody);
+  // A real TitleTokenIndex (not a mock): it has no I/O dependency, and the
+  // test fixture basenames below are distinct English words that never
+  // collide, so it contributes nothing unless a test's own title-token
+  // assertions rely on it deliberately (see the "title tokens" describe block).
+  const titles = new TitleTokenIndex(store);
+  return new ScoringEngine(store, inverted, noBody, titles);
 }
 
 function settings(overrides: Partial<PluginSettings> = {}): PluginSettings {
@@ -173,7 +179,8 @@ describe("ScoringEngine.score", () => {
     store.rebuildAll([snap("active.md"), snap("match.md")]);
     const inverted = new InvertedIndex(store);
     inverted.rebuild();
-    const e = new ScoringEngine(store, inverted, body);
+    const titles = new TitleTokenIndex(store);
+    const e = new ScoringEngine(store, inverted, body, titles);
 
     const active = new Set(["コメント"]);
     // Without exclusion the shared token surfaces match.md.
@@ -262,6 +269,69 @@ describe("ScoringEngine.score", () => {
       NO_TOKENS,
     );
     expect(results).toEqual([]);
+  });
+});
+
+describe("ScoringEngine.score — title tokens (plan C)", () => {
+  it("discovers a candidate purely through a shared title token", () => {
+    // "topic" is shared by exactly 2 of 10 notes (2/10 = 20%, not > 20%), so
+    // the df-ratio guard does not block it from generating a candidate.
+    const filler = Array.from({ length: 8 }, (_, i) => snap(`Filler${i}.md`));
+    const e = engine([
+      snap("Active Topic.md"),
+      snap("Related Topic.md"),
+      ...filler,
+    ]);
+    const { results } = e.score("Active Topic.md", settings(), NO_TOKENS);
+    const related = results.find((r) => r.path === "Related Topic.md");
+    expect(related).toBeDefined();
+    expect(related!.reasons.sharedTitleTokens).toEqual(["topic"]);
+    expect(related!.rawScore).toBeGreaterThan(0);
+  });
+
+  it("guards candidate EXPANSION for an overly common title token, but still scores it once the candidate is in via another signal", () => {
+    // "notes" is carried by 3 of 11 notes (3/11 ≈ 27% > 20%): too common to
+    // fan out on. "Notes Only" shares nothing else with the active note, so
+    // it must never become a candidate. "Notes ViaTag" shares tag x (its own
+    // route into the candidate set) AND the word "notes" — computeReasons/
+    // rawScore aren't gated by the expansion guard, so it should score above
+    // "Plain Baseline", which shares only the tag.
+    const filler = Array.from({ length: 7 }, (_, i) => snap(`Filler${i}.md`));
+    const e = engine([
+      snap("Notes Active.md", { tags: ["x"] }),
+      snap("Notes Only.md"),
+      snap("Notes ViaTag.md", { tags: ["x"] }),
+      snap("Plain Baseline.md", { tags: ["x"] }),
+      ...filler,
+    ]);
+    const { results } = e.score("Notes Active.md", settings(), NO_TOKENS);
+
+    expect(results.find((r) => r.path === "Notes Only.md")).toBeUndefined();
+
+    const viaTag = results.find((r) => r.path === "Notes ViaTag.md");
+    const baseline = results.find((r) => r.path === "Plain Baseline.md");
+    expect(viaTag).toBeDefined();
+    expect(baseline).toBeDefined();
+    expect(viaTag!.reasons.sharedTitleTokens).toEqual(["notes"]);
+    expect(baseline!.reasons.sharedTitleTokens).toEqual([]);
+    expect(viaTag!.rawScore).toBeGreaterThan(baseline!.rawScore);
+  });
+
+  it("titleWeight of 0 removes the title-token score contribution", () => {
+    const filler = Array.from({ length: 8 }, (_, i) => snap(`Filler${i}.md`));
+    const e = engine([
+      snap("Active Topic.md"),
+      snap("Related Topic.md"),
+      ...filler,
+    ]);
+    const { results } = e.score(
+      "Active Topic.md",
+      settings({ titleWeight: 0 }),
+      NO_TOKENS,
+    );
+    // Candidate generation still happens (df-ratio guard is independent of
+    // titleWeight), but with weight 0 there is no score to show for it.
+    expect(results.find((r) => r.path === "Related Topic.md")).toBeUndefined();
   });
 });
 

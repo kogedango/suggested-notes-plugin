@@ -21,12 +21,15 @@ const en = {
     "'Links to this note' is the exception — a flat weight (no IDF) for a single " +
     "asymmetric link: the candidate links here, but this note doesn't link back yet. " +
     "The total is then divided by log(1 + outlinkCount) of the candidate to suppress MOC / index notes. " +
-    "Same folder defaults to 0 — folder co-location often means 'filed together', not 'topically related'.",
+    "Same folder defaults to 0 — folder co-location often means 'filed together', not 'topically related'. " +
+    "Shared title words is on by default and metadata-only (filenames, not bodies) — " +
+    "set it to 0 to turn it off.",
   weightOutlinks: "Shared outlinks",
   weightTags: "Shared tags",
   weightBacklinks: "Shared backlinks",
   weightDirectLink: "Links to this note",
   weightFolder: "Same folder",
+  weightTitle: "Shared title words",
 
   // Settings tab — Body-token matching
   settingBodyTokenHeading: "Body-token matching",
@@ -112,6 +115,7 @@ const en = {
   tipLabelLinksToThisNote: "Links to this note",
   tipLabelSharedBacklinks: "Shared backlinks",
   tipLabelSharedBodyWords: "Shared body words",
+  tipLabelSharedTitleWords: "Shared title words",
   tipLinksHereNotBack: "Links here, not linked back yet",
 
   // main.ts notices
@@ -140,12 +144,15 @@ const ja: Partial<Record<keyof typeof en, string>> = {
     "IDFなしの固定値を加えます。合計は候補ノートの log(1 + 発リンク数) で割られ、" +
     "MOCやインデックスノートが上位を占めすぎないようにします。" +
     "「同じフォルダ」の初期値は0です。フォルダが同じというだけでは" +
-    "「まとめて置いてあるだけ」であって「内容が関連している」とは限らないためです。",
+    "「まとめて置いてあるだけ」であって「内容が関連している」とは限らないためです。" +
+    "「共有するタイトル語」は初期状態で有効で、メタデータのみ(本文ではなく" +
+    "ファイル名)を使います。無効にするには0に設定してください。",
   weightOutlinks: "共有する発リンク",
   weightTags: "共有するタグ",
   weightBacklinks: "共有する被リンク",
   weightDirectLink: "このノートへのリンク",
   weightFolder: "同じフォルダ",
+  weightTitle: "共有するタイトル語",
 
   settingBodyTokenHeading: "本文トークンマッチング",
   settingBodyTokenDesc:
@@ -230,6 +237,7 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   tipLabelLinksToThisNote: "このノートへのリンク",
   tipLabelSharedBacklinks: "共有被リンク",
   tipLabelSharedBodyWords: "共有本文ワード",
+  tipLabelSharedTitleWords: "共有タイトルワード",
   tipLinksHereNotBack: "リンクされていますが、まだリンクを返していません",
 
   noticeBodyTokenRebuilt: "本文トークンインデックスを再構築しました。",

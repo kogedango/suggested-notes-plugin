@@ -419,6 +419,14 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
         .join(" "),
     );
   }
+  if (c.reasons.sharedTitleTokens.length) {
+    parts.push(
+      c.reasons.sharedTitleTokens
+        .slice(0, 4)
+        .map((tok) => `“${tok}”`)
+        .join(" "),
+    );
+  }
   el.setText(parts.length ? parts.join(" · ") : "");
 }
 
@@ -479,6 +487,13 @@ function buildInfoTip(
       icon: "text",
       label: t("tipLabelSharedBodyWords"),
       values: c.reasons.sharedBodyTokens.map((tok) => `“${tok}”`),
+    });
+  }
+  if (showReasons && c.reasons.sharedTitleTokens.length) {
+    sections.push({
+      icon: "file-text",
+      label: t("tipLabelSharedTitleWords"),
+      values: c.reasons.sharedTitleTokens.map((tok) => `“${tok}”`),
     });
   }
   if (sections.length) {

@@ -2,7 +2,7 @@
 
 A sidebar for [Obsidian](https://obsidian.md) that shows notes related to the active note.
 
-Uses shared tags, outlinks, backlinks, and — optionally — rare body tokens as signals, with IDF and an outlink-count penalty as adjustments. Offline, no AI.
+Uses shared tags, outlinks, backlinks, filename words, and — optionally — rare body tokens as signals, with IDF and an outlink-count penalty as adjustments. Offline, no AI.
 
 [日本語 README](./README.ja.md)
 
@@ -33,6 +33,7 @@ For each active note, candidates are narrowed via inverted indexes (`tag → fil
 | Shared outlinks | 8 | per-link IDF |
 | Shared tags | 5 | per-tag IDF |
 | Shared backlinks | 4 | — |
+| Shared title words | 3 | per-token IDF |
 | Shared body tokens | 1.5 | per-token IDF |
 
 The raw score is divided by the candidate's `log(1 + outlinkCount)` to suppress MOC / index notes from dominating results.
@@ -42,6 +43,10 @@ Displayed scores are per-query normalized (top match = 100). Absolute values are
 ### Why folder weight defaults to 0
 
 Notes in the same folder are often related for boring reasons (you put them there). Surfacing them as "related" crowds out genuinely useful suggestions. Configurable.
+
+### Title-token matching (filename words)
+
+**Metadata-only, on by default** — it reads only filenames, never note bodies, so it works even with body-token matching off. Two notes whose filenames share a word (e.g. "Machine Learning Basics" / "Machine Learning Advanced") get credit for it, weighted by IDF like tags and links. Same tokenizer as body-token matching (NFKC, kanji/katakana runs with standalone-gated sub-words), but always without Japanese word segmentation — a filename is a short noun phrase, not prose, so a hiragana-only title is a known gap. To avoid a generic word like "notes" or "日記" fanning out to a large fraction of the vault, a title word carried by more than 20% of notes is not used to *discover* new candidates (though it still adds to the score of a candidate already found via another signal). There's no on/off toggle; set **Shared title words weight** to 0 to disable it.
 
 ## Body-token matching
 
@@ -77,6 +82,7 @@ When enabled, it reads every `.md` once to build a whole-vault index (~10–20s 
 | Shared outlinks weight | 8 | |
 | Shared tags weight | 5 | |
 | Shared backlinks weight | 4 | |
+| Shared title words weight | 3 | On by default; metadata-only (filenames). Set to 0 to disable |
 | Enable body-token matching | off | Optional. On reads all note bodies; off uses tags/links only |
 | Body-token weight | 1.5 | Keep low (1–2) |
 | Salient tokens per note | 40 | Top-N by IDF retained per note |

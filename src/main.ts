@@ -10,6 +10,7 @@ import {
 import { BodyTokenIndex } from "./cache/bodyTokens";
 import { InvertedIndex } from "./cache/inverted";
 import { MetadataStore } from "./cache/metadata";
+import { TitleTokenIndex } from "./cache/titleTokens";
 import { t } from "./i18n";
 import { ScoringEngine } from "./scoring";
 import { RelatedNotesSettingTab } from "./settings/tab";
@@ -22,8 +23,8 @@ const EMPTY_TOKENS: Set<string> = new Set();
 const BODY_REBUILD_DEBOUNCE_MS = 60_000;
 
 // Wiring contract for anything that needs to track vault changes to stay
-// current (store/inverted index, body-token corpus, and eventually a title
-// index). Each hook is optional and independent — a layer that doesn't care
+// current (store/inverted index, body-token corpus, title-token corpus).
+// Each hook is optional and independent — a layer that doesn't care
 // about deletes simply doesn't implement onDelete. `bodyMayHaveChanged`
 // distinguishes a real edit ("changed") from link resolution catching up
 // ("resolve"); a layer decides for itself whether that matters. Whether a
@@ -40,6 +41,7 @@ export default class RelatedNotesPlugin extends Plugin {
   private store!: MetadataStore;
   private inverted!: InvertedIndex;
   private body!: BodyTokenIndex;
+  private titles!: TitleTokenIndex;
   private scoring!: ScoringEngine;
   private cacheLayers: CacheLayer[] = [];
   private ready = false;
@@ -57,7 +59,13 @@ export default class RelatedNotesPlugin extends Plugin {
     this.store = new MetadataStore(this.app);
     this.inverted = new InvertedIndex(this.store);
     this.body = new BodyTokenIndex(this.app);
-    this.scoring = new ScoringEngine(this.store, this.inverted, this.body);
+    this.titles = new TitleTokenIndex(this.store);
+    this.scoring = new ScoringEngine(
+      this.store,
+      this.inverted,
+      this.body,
+      this.titles,
+    );
     this.cacheLayers = this.buildCacheLayers();
 
     this.registerView(
@@ -284,10 +292,10 @@ export default class RelatedNotesPlugin extends Plugin {
   }
 
   // Wires up the cache layers once, at plugin load: the metadata
-  // store+inverted-index pair (always current when ready), and the
-  // body-token corpus (opt-in, debounced). Adding a new layer — e.g. a title
-  // index — is one more object in this array; the event handlers below don't
-  // change.
+  // store+inverted-index pair (always current when ready), the body-token
+  // corpus (opt-in, debounced), and the title-token corpus (always on, lazy
+  // full rebuild on next read). Adding a new layer is one more object in
+  // this array; the event handlers below don't change.
   private buildCacheLayers(): CacheLayer[] {
     return [
       {
@@ -333,6 +341,25 @@ export default class RelatedNotesPlugin extends Plugin {
           // No body re-read needed: text didn't change, just re-key the entry.
           this.body.rename(oldPath, file.path);
         },
+      },
+      {
+        // Title tokens need no file read (the basename is already in every
+        // FileSnapshot's path), so there's no per-note refresh to do here —
+        // just invalidate the corpus. It rebuilds lazily, in full, the next
+        // time scoring reads it (see cache/titleTokens.ts for why a full
+        // rebuild is the simple choice for this signal specifically). A
+        // rename changes the title text itself (unlike body's rename, which
+        // only moves a key), so it must invalidate too, not just re-key.
+        // onChanged also fires for a brand-new file, which IS a title the
+        // corpus hasn't seen yet — there's no cheaper way to distinguish
+        // "new file" from "same file, body edited" here, so every edit marks
+        // the corpus dirty too. That costs nothing extra in practice: the
+        // rebuild is lazy (only pays for itself on the next actual read, at
+        // most once per debounced refresh) and cheap (tokenizing every
+        // basename in the vault, not every body).
+        onChanged: () => this.titles.markDirty(),
+        onDelete: () => this.titles.markDirty(),
+        onRename: () => this.titles.markDirty(),
       },
     ];
   }

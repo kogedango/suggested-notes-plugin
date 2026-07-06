@@ -1,6 +1,7 @@
 import type { BodyTokenIndex } from "../cache/bodyTokens";
 import type { InvertedIndex } from "../cache/inverted";
 import type { SnapshotReader } from "../cache/store";
+import type { TitleTokenIndex } from "../cache/titleTokens";
 import type {
   FileSnapshot,
   PluginSettings,
@@ -27,6 +28,14 @@ const EMPTY_TOKENS: Set<string> = new Set();
 // used elsewhere to suppress MOC dominance).
 const FOCUSED_SOURCE_MAX_OUTLINKS = 20;
 
+// Plan C, guard E-1: a title token carried by more than this fraction of the
+// vault (e.g. "メモ", "日記") is too generic to justify fanning out to every
+// note that uses it — that's candidate-set bloat, not evidence of relatedness.
+// It still counts as a shared token for scoring (rawScore/computeReasons
+// don't consult this), since a candidate that's already in the pool via some
+// other signal legitimately gets credit for the shared word too.
+const TITLE_TOKEN_EXPANSION_MAX_DF_RATIO = 0.2;
+
 export class ScoringEngine {
   private idf: IDFTables;
 
@@ -34,6 +43,7 @@ export class ScoringEngine {
     private store: SnapshotReader,
     private inverted: InvertedIndex,
     private body: BodyTokenIndex,
+    private titles: TitleTokenIndex,
   ) {
     this.idf = new IDFTables(store, inverted);
   }
@@ -76,10 +86,10 @@ export class ScoringEngine {
       }
     };
     // Shared shape for sources that fan out through an index: iterate the
-    // active note's own keys (tags / outlinks / body tokens / backlink
-    // sources), skip excluded/disqualified keys, and pull in whatever files
-    // that key maps to. A future signal (e.g. title tokens) is one more call
-    // to this, not a new loop shape.
+    // active note's own keys (tags / outlinks / body tokens / title tokens /
+    // backlink sources), skip excluded/disqualified keys, and pull in
+    // whatever files that key maps to. A future signal is one more call to
+    // this, not a new loop shape.
     const addCandidatesByKey = (
       keys: Iterable<string>,
       isExcluded: (key: string) => boolean,
@@ -128,6 +138,23 @@ export class ScoringEngine {
         (tok) => this.body.filesWithToken(tok),
       );
     }
+    // Plan C: shared filename (title) words. Metadata-only, on by default —
+    // no enabled flag to gate this behind, unlike body tokens. Guarded by
+    // TITLE_TOKEN_EXPANSION_MAX_DF_RATIO so a generic title word ("メモ",
+    // "日記") doesn't fan out to a large fraction of the vault; it can still
+    // score below via computeReasons, which doesn't apply this gate.
+    addCandidatesByKey(
+      this.titles.tokensFor(activePath),
+      (tok) => {
+        const total = this.titles.totalNotesCount();
+        return (
+          total > 0 &&
+          this.titles.notesWithTokenCount(tok) >
+            TITLE_TOKEN_EXPANSION_MAX_DF_RATIO * total
+        );
+      },
+      (tok) => this.titles.filesWithToken(tok),
+    );
 
     const scored: Array<{
       snap: FileSnapshot;
@@ -275,6 +302,19 @@ export class ScoringEngine {
         }
       }
     }
+    // Title tokens live in the corpus (not a per-query value like body
+    // tokens), so both sides are read straight from the index. Deliberately
+    // NOT gated by TITLE_TOKEN_EXPANSION_MAX_DF_RATIO — that guard only
+    // controls candidate *expansion*; a token too generic to fan out on is
+    // still real evidence once the candidate is already in the pool.
+    const sharedTitleTokens: string[] = [];
+    const aTitleTokens = this.titles.tokensFor(a.path);
+    if (aTitleTokens.size > 0) {
+      const bTitleTokens = this.titles.tokensFor(b.path);
+      for (const tok of aTitleTokens) {
+        if (bTitleTokens.has(tok)) sharedTitleTokens.push(tok);
+      }
+    }
     // Item 1: the direct, asymmetric link signal — b links to a AND a hasn't
     // linked back yet. A mutual pair is excluded: the point of this signal is
     // surfacing link-back opportunities, and the UI copy ("not linked back
@@ -286,6 +326,7 @@ export class ScoringEngine {
       sharedOutlinks,
       sharedBacklinks,
       sharedBodyTokens,
+      sharedTitleTokens,
       linksToActive,
     };
   }
@@ -320,6 +361,8 @@ export class ScoringEngine {
       for (const tok of r.sharedBodyTokens)
         s += settings.bodyTokenWeight * this.body.idf(tok);
     }
+    for (const tok of r.sharedTitleTokens)
+      s += settings.titleWeight * this.titles.idf(tok);
     return s / outlinkCountPenalty(b.outlinkCount);
   }
 }
