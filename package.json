@@ -1,6 +1,6 @@
 {
   "name": "suggested-notes-plugin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Sidebar plugin for Obsidian that suggests related notes based on shared tags, links, and body tokens.",
   "main": "main.js",
   "scripts": {
