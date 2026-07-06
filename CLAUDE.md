@@ -21,7 +21,7 @@ Core pipeline:
 
 ### Scoring (mandatory baseline — not optional)
 
-Weighted sum of shared signals (default weights: outlinks 8, tags 5, backlinks 4, direct link 6, folder 0) with these required adjustments:
+Weighted sum of shared signals (default weights: outlinks 8, tags 5, backlinks 4, direct link 6, title 3, folder 0) with these required adjustments:
 
 - **Direct link** (`directLinkWeight`, default 6): a flat add (no IDF) when the candidate links to the active note but the active note doesn't link back yet — this is distinct from *shared* backlinks (`backlinkWeight`), which score co-citation from a third note, not a direct link between the two notes themselves.
 
@@ -35,7 +35,7 @@ Displayed scores are **per-query normalized** (top candidate = 100); raw scores 
 
 Defaults: resolved links only (unresolved `[[wikilinks]]` ignored); aliases not supported in MVP; MVP insertion only **appends to the active note** (never mutates other notes).
 
-Note titles (filenames) are deliberately unused as a signal for now. They are the natural next candidate if the baseline needs another signal: pure metadata, no body read, works with body-token matching off.
+**Title-token signal** (implemented 2026-07, plan C): basenames are tokenized (segmenter always off — hiragana-only titles are a known gap) and shared title tokens add `titleWeight × idf(token)` (default 3, own lazy df/IDF table). The n-gram sub-unit gate uses a `standalone` set harvested **from titles themselves** (all titles are in-memory metadata — no body read), so morpheme-straddling 2-grams don't resurface here. Candidate expansion (not scoring) is skipped for title tokens with df > 20% of the vault (`TITLE_TOKEN_EXPANSION_MAX_DF_RATIO`) to stop generic title words (メモ, 日記) from exploding the candidate set. Pure metadata, works with body-token matching off — this is part of the default experience.
 
 ### Body-token matching (optional, OFF by default)
 
