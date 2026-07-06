@@ -4,14 +4,24 @@ export interface PluginSettings {
   outlinkWeight: number;
   tagWeight: number;
   backlinkWeight: number;
+  // Flat weight (no IDF) added when the candidate links to the active note
+  // but the active note doesn't link back — distinct from `backlinkWeight`,
+  // which scores *shared* backlinks (co-citation from a third note).
+  directLinkWeight: number;
   folderWeight: number;
+  // Weight per shared filename (title) token, applied like tagWeight/
+  // outlinkWeight (weight * IDF). Metadata-only, on by default — see
+  // cache/titleTokens.ts. No enable/disable toggle; set to 0 to turn it off.
+  titleWeight: number;
 
   bodyTokenEnabled: boolean;
   bodyTokenWeight: number;
   bodyTokenTopN: number;
-  // Experimental: TinySegmenter-based Japanese word segmentation, picking up
+  // TinySegmenter-based Japanese word segmentation, picking up
   // okurigana-mixed (打ち合わせ) and hiragana-only (ひらめき) words the
-  // script-run tokenizer cannot see. Offline, deterministic, opt-in.
+  // script-run tokenizer cannot see. Offline, deterministic. On by default
+  // (see DEFAULT_SETTINGS below); disable for vaults with little Japanese
+  // text to speed up indexing.
   bodyTokenSegmenterEnabled: boolean;
 
   showScores: boolean;
@@ -21,6 +31,10 @@ export interface PluginSettings {
   excludedFolders: string[];
   excludedTags: string[];
   excludedLinks: string[];
+  // Body-token stopwords: words (e.g. recurring heading words like コメント /
+  // 結果) that should never count as a shared body signal. Normalized through
+  // the same tokenizer the bodies use, so the entered word matches the token.
+  excludedBodyTokens: string[];
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -29,12 +43,17 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   outlinkWeight: 8,
   tagWeight: 5,
   backlinkWeight: 4,
+  directLinkWeight: 6,
   folderWeight: 0,
+  titleWeight: 3,
 
   bodyTokenEnabled: false,
   bodyTokenWeight: 1.5,
   bodyTokenTopN: 40,
-  bodyTokenSegmenterEnabled: false,
+  // On by default since plan F's CPU benchmark (tmp/f-bench-report.md):
+  // 1,262-note vault rebuilds in 2.15s and queries at p95 4.7ms, both well
+  // within budget even at a 5x mobile-CPU estimate.
+  bodyTokenSegmenterEnabled: true,
 
   showScores: true,
   showSharedReasons: true,
@@ -43,6 +62,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   excludedFolders: [],
   excludedTags: [],
   excludedLinks: [],
+  excludedBodyTokens: [],
 };
 
 export interface FileSnapshot {
@@ -61,6 +81,10 @@ export interface SharedReasons {
   sharedOutlinks: string[];
   sharedBacklinks: string[];
   sharedBodyTokens: string[];
+  sharedTitleTokens: string[];
+  // B links to A (the active note) but A doesn't link back yet. Distinct
+  // from `sharedBacklinks` (co-citation from a third note).
+  linksToActive: boolean;
 }
 
 export interface ScoredCandidate {

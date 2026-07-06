@@ -16,12 +16,19 @@ import { tokenize } from "../util/tokenize";
 // and the unbounded per-note token retention. The deliberate trade-off: a
 // recently-edited *other* note's body signal lags until the next rebuild.
 export class BodyTokenIndex {
-  // Corpus: per-note salient tokens (top-N by IDF), used for candidate notes.
+  // Corpus: per-note salient tokens (top-N by log(1+TF) * IDF), used for
+  // candidate notes.
   private salient = new Map<string, Set<string>>();
   // Corpus: token -> notes whose salient set contains it.
   private inverted = new Map<string, Set<string>>();
   // Corpus: global doc-freq over full token sets (drives IDF).
   private df = new Map<string, number>();
+  // Corpus: standalone-word units seen on their own somewhere in the vault
+  // (kanji 2-grams and whole katakana words), used to gate interior sub-units
+  // of longer runs. Frozen per rebuild like df (a unit new to the vault is not
+  // trusted as a word until the next coarse rebuild — the same staleness
+  // trade-off df already accepts).
+  private standalone = new Set<string>();
   private totalNotes = 0;
   private idfCache = new Map<string, number>();
   private built = false;
@@ -32,6 +39,7 @@ export class BodyTokenIndex {
     this.salient = new Map();
     this.inverted = new Map();
     this.df = new Map();
+    this.standalone = new Set();
     this.idfCache.clear();
     this.totalNotes = 0;
     this.built = false;
@@ -78,7 +86,12 @@ export class BodyTokenIndex {
   ): Promise<Set<string>> {
     if (!this.built) return new Set();
     const body = await this.app.vault.cachedRead(file);
-    return rankSalient(tokenize(body, segment), topN, this.df, this.totalNotes);
+    return rankSalient(
+      tokenize(body, segment, this.standalone),
+      topN,
+      this.df,
+      this.totalNotes,
+    );
   }
 
   // --- Cheap corpus maintenance ---
@@ -96,7 +109,11 @@ export class BodyTokenIndex {
     segment: boolean,
   ): Promise<void> {
     if (!this.built) return;
-    const tokens = tokenize(await this.app.vault.cachedRead(file), segment);
+    const tokens = tokenize(
+      await this.app.vault.cachedRead(file),
+      segment,
+      this.standalone,
+    );
     const next = rankSalient(tokens, topN, this.df, this.totalNotes);
     this.remove(file.path);
     this.salient.set(file.path, next);
@@ -143,20 +160,54 @@ export class BodyTokenIndex {
 
   async rebuildAll(topN: number, segment: boolean): Promise<void> {
     const files = this.app.vault.getMarkdownFiles();
-    const nextDf = new Map<string, number>();
-    const perFileTokens = new Map<string, Set<string>>();
+    const nextStandalone = new Set<string>();
+    const perFileTokens = new Map<string, Map<string, number>>();
 
+    // Pass 1: one read AND one scan per note. Tokenize ungated (the standalone
+    // set isn't complete yet, so interior sub-units can't be filtered here) and
+    // harvest the standalone-word units from the same matchAll via the fourth
+    // arg — no separate corpus pass over the body.
     const CHUNK = 32;
     for (let i = 0; i < files.length; i += CHUNK) {
       await Promise.all(
         files.slice(i, i + CHUNK).map(async (f) => {
-          const tokens = tokenize(await this.app.vault.cachedRead(f), segment);
-          if (tokens.size === 0) return; // skip empty notes: they only dilute IDF
-          perFileTokens.set(f.path, tokens);
-          for (const t of tokens) nextDf.set(t, (nextDf.get(t) ?? 0) + 1);
+          // A single file's read failing (permission error, race with a
+          // delete mid-rebuild, etc.) must not abort the whole rebuild — it
+          // just drops that note from this corpus generation, same as if it
+          // were empty. Errors are logged, not swallowed silently.
+          try {
+            const body = await this.app.vault.cachedRead(f);
+            const tokens = tokenize(body, segment, undefined, nextStandalone);
+            if (tokens.size === 0) return; // skip empty notes: they only dilute IDF
+            perFileTokens.set(f.path, tokens);
+          } catch (err) {
+            console.error(
+              `Suggested Notes: failed to read "${f.path}" during body-token rebuild, skipping it`,
+              err,
+            );
+          }
         }),
       );
       await yieldToEventLoop(); // keep large / mobile vaults responsive
+    }
+
+    // Pass 2: the standalone set is now final, so gate each note's interior
+    // sub-units (drop morpheme-straddling kanji 2-grams like 本語 / 員何 and
+    // never-standalone katakana sub-words) and build df over the gated tokens.
+    // Gating in place avoids a second read of every note; it is equivalent to
+    // tokenize()'s standalone gate — a full run is always in nextStandalone (it
+    // was harvested above), so only never-standalone interior sub-units drop.
+    // df stays a presence count (0/1 per note) — TF (the per-note occurrence
+    // counts tokenize() returns) only feeds salience ranking below, never df.
+    const nextDf = new Map<string, number>();
+    for (const tokens of perFileTokens.values()) {
+      for (const t of tokens.keys()) {
+        if (isInteriorArtifact(t, nextStandalone)) {
+          tokens.delete(t);
+          continue;
+        }
+        nextDf.set(t, (nextDf.get(t) ?? 0) + 1);
+      }
     }
 
     // Derive the whole new corpus into locals first. The live corpus keeps
@@ -181,6 +232,7 @@ export class BodyTokenIndex {
     }
 
     this.df = nextDf;
+    this.standalone = nextStandalone;
     this.totalNotes = totalNotes;
     this.salient = nextSalient;
     this.inverted = nextInverted;
@@ -189,24 +241,43 @@ export class BodyTokenIndex {
   }
 }
 
-// Rank a token set by IDF against the given doc-freq table and keep the
-// top-N. Pure: used both for corpus builds (against the under-construction
-// df) and for live queries (against the current corpus df).
-function rankSalient(
-  tokens: Set<string>,
+// An interior sub-unit that never appears as a standalone word is pure noise:
+// it only re-matches the compound the full run already matches. Two shapes —
+// a length-2 kanji 2-gram straddling a morpheme boundary (本語 from 日本語, 員何
+// from 全員何も), or a katakana sub-word that never stands alone (the cross-
+// morpheme fragments of リチウムバッテリー). A genuine full run is always in the
+// standalone set (self-harvested), so it survives. Mirrors tokenize()'s gate
+// for the query side.
+function isInteriorArtifact(token: string, standalone: Set<string>): boolean {
+  if (/^[一-龥々]{2}$/.test(token)) return !standalone.has(token);
+  if (/^[ァ-ヶー]+$/.test(token)) return !standalone.has(token);
+  return false;
+}
+
+// Rank a note's tokens (with their in-body occurrence counts) against the
+// given doc-freq table and keep the top-N by log(1+TF) * IDF, so a token the
+// note repeats beats an equally-rare token it only mentions once (design-
+// review-2026-07-02 #5) while df/IDF themselves stay presence-based (0/1 per
+// note) — TF only decides which tokens make the cut, not what "rare" means.
+// Pure: used both for corpus builds (against the under-construction df) and
+// for live queries (against the current corpus df). Exported for direct unit
+// testing of the ranking formula.
+export function rankSalient(
+  tokens: Map<string, number>,
   topN: number,
   df: Map<string, number>,
   totalNotes: number,
 ): Set<string> {
   const maxDf = Math.max(2, Math.floor(totalNotes * 0.4));
-  const ranked: Array<{ t: string; idf: number }> = [];
-  for (const t of tokens) {
+  const ranked: Array<{ t: string; score: number }> = [];
+  for (const [t, tf] of tokens) {
     const n = df.get(t) ?? 0;
     if (n < 2) continue; // singletons can't produce shared signal
     if (n > maxDf) continue; // stop-word-like
-    ranked.push({ t, idf: Math.log(totalNotes / n) });
+    const idf = Math.log(totalNotes / n);
+    ranked.push({ t, score: Math.log(1 + tf) * idf });
   }
-  ranked.sort((a, b) => b.idf - a.idf);
+  ranked.sort((a, b) => b.score - a.score);
 
   const set = new Set<string>();
   for (const r of ranked.slice(0, topN)) set.add(r.t);

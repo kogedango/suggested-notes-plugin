@@ -1,4 +1,5 @@
 import { ItemView, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { t } from "../i18n";
 import type RelatedNotesPlugin from "../main";
 import type { ScoredCandidate, SuggestedTag } from "../types";
 import { displayName } from "../util/path";
@@ -34,7 +35,7 @@ export class RelatedNotesView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Suggested Notes";
+    return t("viewName");
   }
 
   getIcon(): string {
@@ -63,6 +64,16 @@ export class RelatedNotesView extends ItemView {
       true,
     );
     this.render();
+    // onOpen runs exactly once, when this view instance is created (e.g. the
+    // sidebar is (re)opened) — never on a plain focus change — so this can't
+    // reintroduce the copy-button double-click bug that active-leaf-change's
+    // own-focus guard exists to avoid (see main.ts). Without this, reopening
+    // the sidebar on the *same* active note as before would never refresh:
+    // active-leaf-change dedupes on lastRefreshedPath, which a fresh view
+    // instance hasn't earned yet. requestRefresh() re-runs the (idempotent)
+    // refresh unconditionally; refresh()'s own "not ready yet" guard keeps
+    // the loading placeholder up if the plugin hasn't finished indexing.
+    this.plugin.requestRefresh();
   }
 
   async onClose(): Promise<void> {
@@ -84,8 +95,13 @@ export class RelatedNotesView extends ItemView {
     results: ScoredCandidate[],
     suggestedTags: SuggestedTag[],
   ): void {
+    // Only truly empty (no related notes AND no tag suggestions) collapses
+    // to the "empty" state. `hideAlreadyLinked` can legitimately drain
+    // `results` while `suggestedTags` still has content — the scoring layer
+    // deliberately keeps already-linked notes in the tag pool (see
+    // ScoreResult) — so that case must still render the tags section.
     this.state =
-      results.length === 0
+      results.length === 0 && suggestedTags.length === 0
         ? { kind: "empty" }
         : { kind: "ready", activePath, results, suggestedTags };
     this.render();
@@ -102,19 +118,19 @@ export class RelatedNotesView extends ItemView {
     switch (this.state.kind) {
       case "loading":
         container.createEl("div", {
-          text: "Indexing vault…",
+          text: t("statusIndexing"),
           cls: "suggested-notes-status",
         });
         return;
       case "no-active":
         container.createEl("div", {
-          text: "Open a note to see related notes.",
+          text: t("statusNoActive"),
           cls: "suggested-notes-status",
         });
         return;
       case "empty":
         container.createEl("div", {
-          text: "No related notes found.",
+          text: t("statusEmpty"),
           cls: "suggested-notes-status",
         });
         return;
@@ -124,7 +140,21 @@ export class RelatedNotesView extends ItemView {
           this.state.activePath,
           this.state.suggestedTags,
         );
-        this.renderList(container, this.state.activePath, this.state.results);
+        if (this.state.results.length === 0) {
+          // Same status copy as the "empty" state — only the tags section
+          // above differs, since suggestedTags is what kept us out of
+          // "empty" in the first place.
+          container.createEl("div", {
+            text: t("statusEmpty"),
+            cls: "suggested-notes-status",
+          });
+        } else {
+          this.renderList(
+            container,
+            this.state.activePath,
+            this.state.results,
+          );
+        }
         return;
     }
   }
@@ -136,7 +166,7 @@ export class RelatedNotesView extends ItemView {
   ): void {
     const section = container.createEl("div", { cls: "suggested-notes-section" });
     section.createEl("div", {
-      text: "Related notes",
+      text: t("sectionRelatedNotes"),
       cls: "suggested-notes-section-header",
     });
     const list = section.createEl("div", { cls: "suggested-notes-list" });
@@ -186,6 +216,9 @@ export class RelatedNotesView extends ItemView {
       if (!reasons.textContent) reasons.remove();
     }
 
+    if (!c.alreadyLinked) {
+      this.attachAppendButton(self, activePath, c.path);
+    }
     this.attachCopyButton(self, activePath, c.path);
   }
 
@@ -262,8 +295,8 @@ export class RelatedNotesView extends ItemView {
     targetPath: string,
   ): void {
     const copyBtn = self.createEl("div", {
-      cls: "clickable-icon suggested-notes-insert",
-      attr: { "aria-label": "Copy link" },
+      cls: "clickable-icon suggested-notes-copy",
+      attr: { "aria-label": t("ariaCopyLink") },
     });
     setIcon(copyBtn, "copy");
     let copiedTimer: number | undefined;
@@ -282,6 +315,36 @@ export class RelatedNotesView extends ItemView {
     });
   }
 
+  // Appends the link to the end of the active note (never mutates the
+  // target). Hidden entirely when already linked — see renderRow — since
+  // appending a duplicate link makes no sense there; the copy button stays
+  // available regardless.
+  private attachAppendButton(
+    self: HTMLElement,
+    activePath: string,
+    targetPath: string,
+  ): void {
+    const addBtn = self.createEl("div", {
+      cls: "clickable-icon suggested-notes-insert",
+      attr: { "aria-label": t("ariaAddLink") },
+    });
+    setIcon(addBtn, "link");
+    let addedTimer: number | undefined;
+    addBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await this.plugin.appendLinkToActive(activePath, targetPath);
+      window.clearTimeout(addedTimer);
+      addBtn.empty();
+      setIcon(addBtn, "check");
+      addBtn.addClass("is-copied");
+      addedTimer = window.setTimeout(() => {
+        addBtn.empty();
+        setIcon(addBtn, "link");
+        addBtn.removeClass("is-copied");
+      }, 1200);
+    });
+  }
+
   private renderTags(
     container: HTMLElement,
     activePath: string,
@@ -292,19 +355,24 @@ export class RelatedNotesView extends ItemView {
       cls: "suggested-notes-tags-section",
     });
     section.createEl("div", {
-      text: "Suggested tags",
+      text: t("sectionSuggestedTags"),
       cls: "suggested-notes-section-header",
     });
     const list = section.createEl("div", { cls: "suggested-notes-tags" });
-    for (const t of tags) {
+    for (const tag of tags) {
       const chip = list.createEl("a", {
         cls: "tag suggested-notes-tag",
-        text: `#${t.tag}`,
-        attr: { "aria-label": `Add #${t.tag} (${t.fromCount} notes)` },
+        text: `#${tag.tag}`,
+        attr: {
+          "aria-label": t("suggestAddTag", {
+            tag: tag.tag,
+            count: tag.fromCount,
+          }),
+        },
       });
       chip.addEventListener("click", (e) => {
         e.preventDefault();
-        this.plugin.addTagToActive(activePath, t.tag);
+        this.plugin.addTagToActive(activePath, tag.tag);
       });
     }
   }
@@ -323,7 +391,7 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
     parts.push(
       c.reasons.sharedTags
         .slice(0, 4)
-        .map((t) => `#${t}`)
+        .map((tag) => `#${tag}`)
         .join(" "),
     );
   }
@@ -335,14 +403,27 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
         .join(" "),
     );
   }
+  if (c.reasons.linksToActive) {
+    parts.push(t("reasonLinksToThisNote"));
+  }
   if (c.reasons.sharedBacklinks.length) {
-    parts.push(`+${c.reasons.sharedBacklinks.length} shared backlink(s)`);
+    parts.push(
+      t("reasonSharedBacklinks", { count: c.reasons.sharedBacklinks.length }),
+    );
   }
   if (c.reasons.sharedBodyTokens.length) {
     parts.push(
       c.reasons.sharedBodyTokens
         .slice(0, 4)
-        .map((t) => `“${t}”`)
+        .map((tok) => `“${tok}”`)
+        .join(" "),
+    );
+  }
+  if (c.reasons.sharedTitleTokens.length) {
+    parts.push(
+      c.reasons.sharedTitleTokens
+        .slice(0, 4)
+        .map((tok) => `“${tok}”`)
         .join(" "),
     );
   }
@@ -376,29 +457,43 @@ function buildInfoTip(
   if (showReasons && c.reasons.sharedTags.length) {
     sections.push({
       icon: "tag",
-      label: "Shared tags",
-      values: c.reasons.sharedTags.map((t) => `#${t}`),
+      label: t("tipLabelSharedTags"),
+      values: c.reasons.sharedTags.map((tag) => `#${tag}`),
     });
   }
   if (showReasons && c.reasons.sharedOutlinks.length) {
     sections.push({
       icon: "links-going-out",
-      label: "Shared links",
+      label: t("tipLabelSharedLinks"),
       values: c.reasons.sharedOutlinks.map((l) => `[[${displayName(l)}]]`),
+    });
+  }
+  if (showReasons && c.reasons.linksToActive) {
+    sections.push({
+      icon: "link",
+      label: t("tipLabelLinksToThisNote"),
+      values: [t("tipLinksHereNotBack")],
     });
   }
   if (showReasons && c.reasons.sharedBacklinks.length) {
     sections.push({
       icon: "links-coming-in",
-      label: "Shared backlinks",
+      label: t("tipLabelSharedBacklinks"),
       values: c.reasons.sharedBacklinks.map((l) => `[[${displayName(l)}]]`),
     });
   }
   if (showReasons && c.reasons.sharedBodyTokens.length) {
     sections.push({
       icon: "text",
-      label: "Shared body words",
-      values: c.reasons.sharedBodyTokens.map((t) => `“${t}”`),
+      label: t("tipLabelSharedBodyWords"),
+      values: c.reasons.sharedBodyTokens.map((tok) => `“${tok}”`),
+    });
+  }
+  if (showReasons && c.reasons.sharedTitleTokens.length) {
+    sections.push({
+      icon: "file-text",
+      label: t("tipLabelSharedTitleWords"),
+      values: c.reasons.sharedTitleTokens.map((tok) => `“${tok}”`),
     });
   }
   if (sections.length) {

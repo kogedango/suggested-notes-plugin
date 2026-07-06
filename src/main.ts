@@ -10,21 +10,40 @@ import {
 import { BodyTokenIndex } from "./cache/bodyTokens";
 import { InvertedIndex } from "./cache/inverted";
 import { MetadataStore } from "./cache/metadata";
+import { TitleTokenIndex } from "./cache/titleTokens";
+import { t } from "./i18n";
 import { ScoringEngine } from "./scoring";
 import { RelatedNotesSettingTab } from "./settings/tab";
 import { DEFAULT_SETTINGS, PluginSettings } from "./types";
+import { parseListInput } from "./util/list";
 import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
 const EMPTY_TOKENS: Set<string> = new Set();
 
 const BODY_REBUILD_DEBOUNCE_MS = 60_000;
 
+// Wiring contract for anything that needs to track vault changes to stay
+// current (store/inverted index, body-token corpus, title-token corpus).
+// Each hook is optional and independent — a layer that doesn't care
+// about deletes simply doesn't implement onDelete. `bodyMayHaveChanged`
+// distinguishes a real edit ("changed") from link resolution catching up
+// ("resolve"); a layer decides for itself whether that matters. Whether a
+// layer is active at all (e.g. body matching being off) is likewise the
+// layer's own call, not something the interface or the wiring loop encodes.
+interface CacheLayer {
+  onChanged?(file: TFile, bodyMayHaveChanged: boolean): void;
+  onDelete?(path: string): void;
+  onRename?(oldPath: string, file: TFile): void;
+}
+
 export default class RelatedNotesPlugin extends Plugin {
   settings!: PluginSettings;
   private store!: MetadataStore;
   private inverted!: InvertedIndex;
   private body!: BodyTokenIndex;
+  private titles!: TitleTokenIndex;
   private scoring!: ScoringEngine;
+  private cacheLayers: CacheLayer[] = [];
   private ready = false;
   private scheduleRefresh!: Debouncer<[], void>;
   private bodyIndexBuilding = false;
@@ -40,7 +59,14 @@ export default class RelatedNotesPlugin extends Plugin {
     this.store = new MetadataStore(this.app);
     this.inverted = new InvertedIndex(this.store);
     this.body = new BodyTokenIndex(this.app);
-    this.scoring = new ScoringEngine(this.store, this.inverted, this.body);
+    this.titles = new TitleTokenIndex(this.store);
+    this.scoring = new ScoringEngine(
+      this.store,
+      this.inverted,
+      this.body,
+      this.titles,
+    );
+    this.cacheLayers = this.buildCacheLayers();
 
     this.registerView(
       VIEW_TYPE_RELATED_NOTES,
@@ -48,7 +74,7 @@ export default class RelatedNotesPlugin extends Plugin {
     );
 
     this.registerHoverLinkSource(VIEW_TYPE_RELATED_NOTES, {
-      display: "Suggested Notes",
+      display: t("viewName"),
       // true = require the Cmd/Ctrl modifier to preview, matching Obsidian's
       // default link-hover behaviour (Page Preview owns the modifier gating
       // and its own hover delay). Obsidian's core "Page preview" plugin must
@@ -60,16 +86,16 @@ export default class RelatedNotesPlugin extends Plugin {
 
     this.addCommand({
       id: "open-suggested-notes",
-      name: "Open Suggested Notes sidebar",
+      name: t("commandOpenSidebar"),
       callback: () => this.activateView(),
     });
 
     this.addCommand({
       id: "rebuild-body-index",
-      name: "Rebuild body-token index",
+      name: t("commandRebuildIndex"),
       callback: () => {
         if (!this.settings.bodyTokenEnabled) {
-          new Notice("Body-token matching is disabled.");
+          new Notice(t("noticeBodyTokenDisabled"));
           return;
         }
         void this.rebuildBodyIndex();
@@ -141,10 +167,7 @@ export default class RelatedNotesPlugin extends Plugin {
       this.app.vault.on("delete", (af: TAbstractFile) => {
         if (!(af instanceof TFile) || af.extension !== "md") return;
         if (!this.ready) return;
-        const snap = this.store.remove(af.path);
-        if (snap) this.inverted.remove(snap);
-        // No body re-read needed: text didn't change, just drop the entry.
-        this.body.remove(af.path);
+        for (const layer of this.cacheLayers) layer.onDelete?.(af.path);
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -154,11 +177,7 @@ export default class RelatedNotesPlugin extends Plugin {
       this.app.vault.on("rename", (af: TAbstractFile, oldPath: string) => {
         if (!(af instanceof TFile) || af.extension !== "md") return;
         if (!this.ready) return;
-        const { prev, next } = this.store.rename(oldPath, af);
-        if (prev) this.inverted.remove({ ...prev, path: oldPath });
-        this.inverted.add(next);
-        // No body re-read needed: text didn't change, just re-key the entry.
-        this.body.rename(oldPath, af.path);
+        for (const layer of this.cacheLayers) layer.onRename?.(oldPath, af);
         this.scoring.markDirty();
         this.scheduleRefresh();
       }),
@@ -177,6 +196,11 @@ export default class RelatedNotesPlugin extends Plugin {
       DEFAULT_SETTINGS,
       await this.loadData(),
     );
+    // Heal lists saved before the comma-aware parser: a comma-separated line
+    // used to be stored as one entry that could never match anything.
+    for (const key of ["excludedTags", "excludedBodyTokens"] as const) {
+      this.settings[key] = parseListInput(this.settings[key].join("\n"), true);
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -219,12 +243,25 @@ export default class RelatedNotesPlugin extends Plugin {
           this.settings.bodyTokenSegmenterEnabled,
         );
       } while (this.bodyRebuildPending);
+      if (this.bodyRebuildNotify) {
+        new Notice(t("noticeBodyTokenRebuilt"));
+      }
+    } catch (err) {
+      // Surface the failure instead of letting it become an unhandled
+      // rejection: silently swallowing it here would leave body matching
+      // inactive (built stays false on a first-run failure) with no signal
+      // to the user beyond a stuck "rebuilding…" state. Reported unconditionally
+      // (not gated on bodyRebuildNotify) since a first automatic/background
+      // rebuild failing is exactly the silent-until-now case this fixes.
+      console.error("Suggested Notes: body-token index rebuild failed", err);
+      new Notice(
+        t("noticeBodyTokenRebuildFailed", {
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
     } finally {
       this.bodyIndexBuilding = false;
-    }
-    if (this.bodyRebuildNotify) {
       this.bodyRebuildNotify = false;
-      new Notice("Body-token index rebuilt.");
     }
     void this.refresh();
   }
@@ -254,31 +291,89 @@ export default class RelatedNotesPlugin extends Plugin {
     }
   }
 
+  // Wires up the cache layers once, at plugin load: the metadata
+  // store+inverted-index pair (always current when ready), the body-token
+  // corpus (opt-in, debounced), and the title-token corpus (always on, lazy
+  // full rebuild on next read). Adding a new layer is one more object in
+  // this array; the event handlers below don't change.
+  private buildCacheLayers(): CacheLayer[] {
+    return [
+      {
+        onChanged: (file) => {
+          const { prev, next } = this.store.update(file);
+          if (prev) this.inverted.remove(prev);
+          this.inverted.add(next);
+        },
+        onDelete: (path) => {
+          const snap = this.store.remove(path);
+          if (snap) this.inverted.remove(snap);
+        },
+        onRename: (oldPath, file) => {
+          const { prev, next } = this.store.rename(oldPath, file);
+          if (prev) this.inverted.remove({ ...prev, path: oldPath });
+          this.inverted.add(next);
+        },
+      },
+      {
+        // Only a real edit ("changed", not "resolve") and body matching
+        // being enabled trigger corpus work: the edited note's salient set is
+        // touched up right away (cheap, df untouched) so fresh text is
+        // discoverable from other notes immediately, and the lazy full
+        // rebuild is scheduled to refresh df. Delete/rename don't change note
+        // text, so they just re-key — and that re-keying is harmless even
+        // when body matching is off (a no-op if the path isn't indexed).
+        onChanged: (file, bodyMayHaveChanged) => {
+          if (!bodyMayHaveChanged || !this.settings.bodyTokenEnabled) return;
+          void this.body
+            .refreshNote(
+              file,
+              this.settings.bodyTokenTopN,
+              this.settings.bodyTokenSegmenterEnabled,
+            )
+            .then(() => this.scheduleRefresh());
+          this.scheduleBodyRebuild();
+        },
+        onDelete: (path) => {
+          // No body re-read needed: text didn't change, just drop the entry.
+          this.body.remove(path);
+        },
+        onRename: (oldPath, file) => {
+          // No body re-read needed: text didn't change, just re-key the entry.
+          this.body.rename(oldPath, file.path);
+        },
+      },
+      {
+        // Title tokens need no file read (the basename is already in every
+        // FileSnapshot's path), so there's no per-note refresh to do here —
+        // just invalidate the corpus. It rebuilds lazily, in full, the next
+        // time scoring reads it (see cache/titleTokens.ts for why a full
+        // rebuild is the simple choice for this signal specifically). A
+        // rename changes the title text itself (unlike body's rename, which
+        // only moves a key), so it must invalidate too, not just re-key.
+        // onChanged also fires for a brand-new file, which IS a title the
+        // corpus hasn't seen yet — there's no cheaper way to distinguish
+        // "new file" from "same file, body edited" here, so every edit marks
+        // the corpus dirty too. That costs nothing extra in practice: the
+        // rebuild is lazy (only pays for itself on the next actual read, at
+        // most once per debounced refresh) and cheap (tokenizing every
+        // basename in the vault, not every body).
+        onChanged: () => this.titles.markDirty(),
+        onDelete: () => this.titles.markDirty(),
+        onRename: () => this.titles.markDirty(),
+      },
+    ];
+  }
+
   // Shared by the "changed" and "resolve" handlers: re-snapshot the file and
   // refresh. Only "changed" implies the body text moved — "resolve" is link
   // resolution catching up, and body tokens don't depend on resolvedLinks, so
   // it skips scheduling the (expensive) corpus rebuild.
   private reindexFile(file: TFile, bodyMayHaveChanged: boolean): void {
     if (!this.ready) return;
-    const { prev, next } = this.store.update(file);
-    if (prev) this.inverted.remove(prev);
-    this.inverted.add(next);
-    this.scoring.markDirty();
-    if (bodyMayHaveChanged && this.settings.bodyTokenEnabled) {
-      // Two corpus paths: the edited note's salient set is touched up right
-      // away (cheap, df untouched) so fresh text is discoverable from other
-      // notes immediately; the full rebuild stays a lazy backstop that
-      // refreshes df. The active note's own query tokens are read fresh at
-      // refresh time regardless.
-      void this.body
-        .refreshNote(
-          file,
-          this.settings.bodyTokenTopN,
-          this.settings.bodyTokenSegmenterEnabled,
-        )
-        .then(() => this.scheduleRefresh());
-      this.scheduleBodyRebuild();
+    for (const layer of this.cacheLayers) {
+      layer.onChanged?.(file, bodyMayHaveChanged);
     }
+    this.scoring.markDirty();
     this.scheduleRefresh();
   }
 
@@ -347,7 +442,7 @@ export default class RelatedNotesPlugin extends Plugin {
   async addTagToActive(activePath: string, tag: string): Promise<void> {
     const active = this.app.workspace.getActiveFile();
     if (!active || active.path !== activePath) {
-      new Notice("Active note has changed.");
+      new Notice(t("noticeActiveNoteChanged"));
       return;
     }
     await this.app.fileManager.processFrontMatter(active, (fm) => {
@@ -365,7 +460,17 @@ export default class RelatedNotesPlugin extends Plugin {
         fm.tags = [tag];
       }
     });
-    new Notice(`+#${tag}`);
+    new Notice(t("noticeTagAdded", { tag }));
+  }
+
+  // Lets a view request a render of the current active note outside the
+  // active-leaf-change flow — namely from its own onOpen, so a sidebar
+  // reopened on the same note it was showing before (which active-leaf-change
+  // won't re-trigger, since lastRefreshedPath is unchanged) doesn't stay
+  // stuck on the loading placeholder. refresh() doesn't consult
+  // lastRefreshedPath, so calling it here is always safe to repeat.
+  requestRefresh(): void {
+    void this.refresh();
   }
 
   async activateView(): Promise<void> {
@@ -394,5 +499,30 @@ export default class RelatedNotesPlugin extends Plugin {
       activePath,
     );
     await navigator.clipboard.writeText(link);
+  }
+
+  // MVP insertion only ever appends to the ACTIVE note — the target note is
+  // never mutated (see CLAUDE.md). activePath is re-checked against the
+  // current active file the same way addTagToActive does, since the button
+  // click is async and the user may have switched notes by the time it runs.
+  async appendLinkToActive(
+    activePath: string,
+    targetPath: string,
+  ): Promise<void> {
+    const active = this.app.workspace.getActiveFile();
+    if (!active || active.path !== activePath) {
+      new Notice(t("noticeActiveNoteChanged"));
+      return;
+    }
+    const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
+    if (!(targetFile instanceof TFile)) return;
+    const link = this.app.fileManager.generateMarkdownLink(
+      targetFile,
+      activePath,
+    );
+    await this.app.vault.process(active, (data) =>
+      data.endsWith("\n") ? `${data}${link}\n` : `${data}\n${link}\n`,
+    );
+    new Notice(t("noticeLinkAdded", { name: targetFile.basename }));
   }
 }

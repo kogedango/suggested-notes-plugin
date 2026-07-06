@@ -1,6 +1,7 @@
 import type { BodyTokenIndex } from "../cache/bodyTokens";
 import type { InvertedIndex } from "../cache/inverted";
 import type { SnapshotReader } from "../cache/store";
+import type { TitleTokenIndex } from "../cache/titleTokens";
 import type {
   FileSnapshot,
   PluginSettings,
@@ -11,6 +12,7 @@ import type {
 } from "../types";
 import {
   isExcludedByFolder,
+  normalizeBodyTokenSet,
   normalizeLinkSet,
   normalizeTagSet,
 } from "../util/normalize";
@@ -20,6 +22,20 @@ import { outlinkCountPenalty } from "./penalties";
 
 const EMPTY_TOKENS: Set<string> = new Set();
 
+// Backlink sources with more outlinks than this look like MOC/index notes —
+// their outlink lists aren't a meaningful "these two are related" signal, so
+// candidate expansion doesn't follow them (mirrors the outlink-count penalty
+// used elsewhere to suppress MOC dominance).
+const FOCUSED_SOURCE_MAX_OUTLINKS = 20;
+
+// Plan C, guard E-1: a title token carried by more than this fraction of the
+// vault (e.g. "メモ", "日記") is too generic to justify fanning out to every
+// note that uses it — that's candidate-set bloat, not evidence of relatedness.
+// It still counts as a shared token for scoring (rawScore/computeReasons
+// don't consult this), since a candidate that's already in the pool via some
+// other signal legitimately gets credit for the shared word too.
+const TITLE_TOKEN_EXPANSION_MAX_DF_RATIO = 0.2;
+
 export class ScoringEngine {
   private idf: IDFTables;
 
@@ -27,6 +43,7 @@ export class ScoringEngine {
     private store: SnapshotReader,
     private inverted: InvertedIndex,
     private body: BodyTokenIndex,
+    private titles: TitleTokenIndex,
   ) {
     this.idf = new IDFTables(store, inverted);
   }
@@ -49,32 +66,95 @@ export class ScoringEngine {
     const excludedTags = normalizeTagSet(settings.excludedTags);
     const excludedLinks = normalizeLinkSet(settings.excludedLinks);
     const useBody = settings.bodyTokenEnabled && activeBodyTokens.size > 0;
+    const excludedBody =
+      useBody && settings.excludedBodyTokens.length > 0
+        ? normalizeBodyTokenSet(
+            settings.excludedBodyTokens,
+            settings.bodyTokenSegmenterEnabled,
+          )
+        : EMPTY_TOKENS;
 
     const candidates = new Set<string>();
 
-    for (const tag of active.tags) {
-      if (excludedTags.has(tag)) continue;
-      for (const p of this.inverted.filesWithTag(tag)) {
+    // Adds every file in `files` except the active note itself. Shared by
+    // every candidate source below, whether the files come straight from a
+    // set on the active note (backlinks, outlinks) or from an inverted-index
+    // lookup.
+    const addCandidates = (files: Iterable<string>): void => {
+      for (const p of files) {
         if (p !== activePath) candidates.add(p);
       }
-    }
-    for (const link of active.outlinks) {
-      if (excludedLinks.has(basename(link))) continue;
-      for (const p of this.inverted.filesLinkingTo(link)) {
-        if (p !== activePath) candidates.add(p);
+    };
+    // Shared shape for sources that fan out through an index: iterate the
+    // active note's own keys (tags / outlinks / body tokens / title tokens /
+    // backlink sources), skip excluded/disqualified keys, and pull in
+    // whatever files that key maps to. A future signal is one more call to
+    // this, not a new loop shape.
+    const addCandidatesByKey = (
+      keys: Iterable<string>,
+      isExcluded: (key: string) => boolean,
+      filesForKey: (key: string) => Iterable<string>,
+    ): void => {
+      for (const key of keys) {
+        if (isExcluded(key)) continue;
+        addCandidates(filesForKey(key));
       }
-    }
-    for (const p of active.backlinks) candidates.add(p);
-    for (const p of active.outlinks) {
-      if (p !== activePath) candidates.add(p);
+    };
+
+    addCandidatesByKey(
+      active.tags,
+      (t) => excludedTags.has(t),
+      (t) => this.inverted.filesWithTag(t),
+    );
+    addCandidatesByKey(
+      active.outlinks,
+      (l) => excludedLinks.has(basename(l)),
+      (l) => this.inverted.filesLinkingTo(l),
+    );
+    addCandidates(active.backlinks);
+    // Item 2: notes co-cited from a "focused" hub are discoverable even
+    // without a shared tag/link of their own. A hub with too many outlinks
+    // (MOC/index) is skipped; sharedBacklinks scoring (already weighted by
+    // source specificity) naturally scores whatever surfaces here.
+    addCandidatesByKey(
+      active.backlinks,
+      (src) => {
+        const source = this.store.get(src);
+        return !source || source.outlinkCount > FOCUSED_SOURCE_MAX_OUTLINKS;
+      },
+      (src) => this.store.get(src)!.outlinks,
+    );
+    addCandidates(active.outlinks);
+    // Item 7: folderWeight only ever scored same-folder notes that were
+    // already candidates via another signal; discover them directly, but
+    // only when the setting is actually in use (default 0 -> no change).
+    if (settings.folderWeight > 0) {
+      addCandidates(this.inverted.filesInFolder(active.folder));
     }
     if (useBody) {
-      for (const tok of activeBodyTokens) {
-        for (const p of this.body.filesWithToken(tok)) {
-          if (p !== activePath) candidates.add(p);
-        }
-      }
+      addCandidatesByKey(
+        activeBodyTokens,
+        (tok) => excludedBody.has(tok),
+        (tok) => this.body.filesWithToken(tok),
+      );
     }
+    // Plan C: shared filename (title) words. Metadata-only, on by default —
+    // no enabled flag to gate this behind, unlike body tokens. Guarded by
+    // TITLE_TOKEN_EXPANSION_MAX_DF_RATIO so a generic title word ("メモ",
+    // "日記") doesn't fan out to a large fraction of the vault; it can still
+    // score below via computeReasons, which doesn't apply this gate.
+    addCandidatesByKey(
+      this.titles.tokensFor(activePath),
+      (tok) => {
+        const total = this.titles.totalNotesCount();
+        return (
+          total > 0 &&
+          this.titles.notesWithTokenCount(tok) >
+            TITLE_TOKEN_EXPANSION_MAX_DF_RATIO * total
+        );
+      },
+      (tok) => this.titles.filesWithToken(tok),
+    );
 
     const scored: Array<{
       snap: FileSnapshot;
@@ -93,6 +173,7 @@ export class ScoringEngine {
         excludedTags,
         excludedLinks,
         useBody ? activeBodyTokens : EMPTY_TOKENS,
+        excludedBody,
       );
       const raw = this.rawScore(snap, reasons, settings, snap.folder === active.folder);
       if (raw <= 0) continue;
@@ -133,6 +214,8 @@ export class ScoringEngine {
   // from the list does not drop its tags from suggestions.
   // Filters: must appear in >=2 pool notes AND have global df >=3
   // (kills typos and one-off tags).
+  // `limit` (12) caps the chip row so the tags section stays a glanceable
+  // strip above the results list; deliberately not a user setting.
   suggestTags(
     activePath: string,
     pool: ScoredCandidate[],
@@ -193,6 +276,7 @@ export class ScoringEngine {
     excludedTags: Set<string>,
     excludedLinks: Set<string>,
     activeBodyTokens: Set<string>,
+    excludedBody: Set<string>,
   ): SharedReasons {
     const sharedTags: string[] = [];
     for (const t of a.tags) {
@@ -213,11 +297,38 @@ export class ScoringEngine {
       const bTokens = this.body.salientFor(b.path);
       if (bTokens.size > 0) {
         for (const tok of activeBodyTokens) {
+          if (excludedBody.has(tok)) continue;
           if (bTokens.has(tok)) sharedBodyTokens.push(tok);
         }
       }
     }
-    return { sharedTags, sharedOutlinks, sharedBacklinks, sharedBodyTokens };
+    // Title tokens live in the corpus (not a per-query value like body
+    // tokens), so both sides are read straight from the index. Deliberately
+    // NOT gated by TITLE_TOKEN_EXPANSION_MAX_DF_RATIO — that guard only
+    // controls candidate *expansion*; a token too generic to fan out on is
+    // still real evidence once the candidate is already in the pool.
+    const sharedTitleTokens: string[] = [];
+    const aTitleTokens = this.titles.tokensFor(a.path);
+    if (aTitleTokens.size > 0) {
+      const bTitleTokens = this.titles.tokensFor(b.path);
+      for (const tok of aTitleTokens) {
+        if (bTitleTokens.has(tok)) sharedTitleTokens.push(tok);
+      }
+    }
+    // Item 1: the direct, asymmetric link signal — b links to a AND a hasn't
+    // linked back yet. A mutual pair is excluded: the point of this signal is
+    // surfacing link-back opportunities, and the UI copy ("not linked back
+    // yet") depends on the asymmetry. Distinct from sharedBacklinks'
+    // co-citation.
+    const linksToActive = a.backlinks.has(b.path) && !a.outlinks.has(b.path);
+    return {
+      sharedTags,
+      sharedOutlinks,
+      sharedBacklinks,
+      sharedBodyTokens,
+      sharedTitleTokens,
+      linksToActive,
+    };
   }
 
   private rawScore(
@@ -230,7 +341,19 @@ export class ScoringEngine {
     for (const t of r.sharedTags) s += settings.tagWeight * this.idf.tag(t);
     for (const l of r.sharedOutlinks)
       s += settings.outlinkWeight * this.idf.link(l);
-    s += settings.backlinkWeight * r.sharedBacklinks.length;
+    // Weight each shared backlink by the source's specificity: a co-citation
+    // from a focused note is a stronger relatedness signal than one from a
+    // MOC/index that links to everything. Reuses the outlink-count penalty on
+    // the source note (few outlinks -> weight ~1, many -> approaches 0).
+    for (const src of r.sharedBacklinks) {
+      const source = this.store.get(src);
+      const weight = source ? 1 / outlinkCountPenalty(source.outlinkCount) : 1;
+      s += settings.backlinkWeight * weight;
+    }
+    // Item 1: flat add, no IDF/specificity factor — the final
+    // outlinkCountPenalty(b.outlinkCount) division already suppresses
+    // MOC-like candidates.
+    if (r.linksToActive) s += settings.directLinkWeight;
     if (settings.folderWeight > 0 && sameFolder) {
       s += settings.folderWeight;
     }
@@ -238,6 +361,8 @@ export class ScoringEngine {
       for (const tok of r.sharedBodyTokens)
         s += settings.bodyTokenWeight * this.body.idf(tok);
     }
+    for (const tok of r.sharedTitleTokens)
+      s += settings.titleWeight * this.titles.idf(tok);
     return s / outlinkCountPenalty(b.outlinkCount);
   }
 }
