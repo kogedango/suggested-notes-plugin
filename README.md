@@ -4,6 +4,8 @@ A sidebar for [Obsidian](https://obsidian.md) that shows notes related to the ac
 
 Uses shared tags, outlinks, backlinks, filename words, and — optionally — rare body tokens as signals, with IDF and an outlink-count penalty as adjustments. Offline, no AI.
 
+![Suggested Notes sidebar showing related notes and suggested tags for the active note](docs/screenshot.png)
+
 [日本語 README](./README.ja.md)
 
 ## Install
