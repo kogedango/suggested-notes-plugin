@@ -47,8 +47,8 @@ function strip(body: string): string {
     .replace(/(^|[\s(])#(?=[\p{N}\-/]*[\p{L}_])[\p{L}\p{N}_\-/]+/gu, " ");
 }
 
-// `segment` (experimental, corresponds to the bodyTokenSegmenterEnabled
-// setting) additionally runs TinySegmenter to pick up words the script-run
+// `segment` (corresponds to the bodyTokenSegmenterEnabled setting, ON by
+// default) additionally runs TinySegmenter to pick up words the script-run
 // regex below cannot see: okurigana-mixed words (打ち合わせ, 振り返り) and
 // hiragana-only words (ひらめき). Corpus and query must be tokenized with the
 // same flag — toggling the setting triggers a corpus rebuild.
@@ -163,8 +163,8 @@ function addKatakanaRun(
 // run and each 2-gram by exact match — a tiny closed-class list (personal
 // pronouns, 以-series relative-position compounds) with no plausible
 // domain-specific reading. This is the only JA vocabulary gate that has any
-// effect with bodyTokenSegmenterEnabled OFF (the default), since this
-// script-run path always runs regardless of that setting. The match is exact
+// effect when bodyTokenSegmenterEnabled is off, since this script-run path
+// always runs regardless of that setting. The match is exact
 // only, so a longer run built on a gated unit (自分自身) still survives whole.
 function addKanjiRun(
   out: Map<string, number>,

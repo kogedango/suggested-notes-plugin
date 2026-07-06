@@ -17,9 +17,11 @@ export interface PluginSettings {
   bodyTokenEnabled: boolean;
   bodyTokenWeight: number;
   bodyTokenTopN: number;
-  // Experimental: TinySegmenter-based Japanese word segmentation, picking up
+  // TinySegmenter-based Japanese word segmentation, picking up
   // okurigana-mixed (打ち合わせ) and hiragana-only (ひらめき) words the
-  // script-run tokenizer cannot see. Offline, deterministic, opt-in.
+  // script-run tokenizer cannot see. Offline, deterministic. On by default
+  // (see DEFAULT_SETTINGS below); disable for vaults with little Japanese
+  // text to speed up indexing.
   bodyTokenSegmenterEnabled: boolean;
 
   showScores: boolean;
@@ -48,7 +50,10 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   bodyTokenEnabled: false,
   bodyTokenWeight: 1.5,
   bodyTokenTopN: 40,
-  bodyTokenSegmenterEnabled: false,
+  // On by default since plan F's CPU benchmark (tmp/f-bench-report.md):
+  // 1,262-note vault rebuilds in 2.15s and queries at p95 4.7ms, both well
+  // within budget even at a 5x mobile-CPU estimate.
+  bodyTokenSegmenterEnabled: true,
 
   showScores: true,
   showSharedReasons: true,

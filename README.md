@@ -56,7 +56,7 @@ Notes in the same folder are often related for boring reasons (you put them ther
 - NFKC-normalizes (so full-width / half-width variants match), then extracts English, katakana (2+ chars), and kanji (2+ chars) by regex
 - Kanji runs also emit overlapping bigrams (機械学習 → 機械 / 械学 / 学習), so compounds match notes that use only their parts
 - Trailing prolonged marks are normalized (サーバー and サーバ match)
-- Optional **Japanese word segmentation (experimental)**: runs TinySegmenter (offline, no dictionary) to also catch okurigana-mixed words (打ち合わせ) and hiragana words (ひらめき) the regex cannot see
+- **Japanese word segmentation (on by default)**: runs TinySegmenter (offline, no dictionary) to also catch okurigana-mixed words (打ち合わせ) and hiragana words (ひらめき) the regex cannot see; turn it off for vaults with little Japanese text to speed up indexing
 - Retains top-N salient tokens per note by IDF (default 40)
 - Tokens appearing in >40% of the vault are auto-excluded as stopwords
 
@@ -86,7 +86,7 @@ When enabled, it reads every `.md` once to build a whole-vault index (~10–20s 
 | Enable body-token matching | off | Optional. On reads all note bodies; off uses tags/links only |
 | Body-token weight | 1.5 | Keep low (1–2) |
 | Salient tokens per note | 40 | Top-N by IDF retained per note |
-| Japanese word segmentation | off | Experimental. TinySegmenter; catches 打ち合わせ-style and hiragana words |
+| Japanese word segmentation | on | TinySegmenter; catches 打ち合わせ-style and hiragana words. Turn off for mostly non-Japanese vaults to speed up indexing |
 | Show scores | on | |
 | Show shared reasons | on | What each match shares |
 | Hide already-linked | off | |

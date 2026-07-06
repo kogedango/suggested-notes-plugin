@@ -38,16 +38,15 @@ const en = {
     "Off by default: enabling reads every .md file once (async, ~10–20s for 5,000 notes) to build the index. " +
     "The active note is always re-read live, and an edited note's index entry updates as soon as the edit settles (~2s). " +
     "Whole-vault statistics rebuild lazily (~1 min after edits settle), " +
-    "or immediately via the Rebuild button below / 'Rebuild body-token index' command. " +
-    "For Japanese vaults, also enable Japanese word segmentation below.",
+    "or immediately via the Rebuild button below / 'Rebuild body-token index' command.",
   settingBodyTokenEnable: "Enable body-token matching",
-  settingSegmenterName:
-    "Japanese word segmentation (recommended for Japanese vaults)",
+  settingSegmenterName: "Japanese word segmentation (on by default)",
   settingSegmenterDesc:
     "Splits Japanese text into words with TinySegmenter (offline, no dictionary) " +
     "so okurigana-mixed words like 打ち合わせ・読み込み and hiragana words like " +
     "ひらめき also count as shared vocabulary — without this, such words are " +
-    "invisible to body-token matching. Changing this rebuilds the index.",
+    "invisible to body-token matching. On by default; turn it off for vaults " +
+    "with little Japanese text to make indexing faster. Changing this rebuilds the index.",
   settingBodyTokenWeight: "Body-token weight",
   settingTopN: "Salient tokens per note",
   descRebuildsIndex: "Changing this rebuilds the index.",
@@ -163,16 +162,16 @@ const ja: Partial<Record<keyof typeof en, string>> = {
     "ノートのインデックス項目は編集が落ち着いてから(約2秒後)すぐに更新されます。" +
     "Vault全体の統計は編集が落ち着いてから約1分後に遅延再構築されるほか、下の" +
     "「再構築」ボタンや「本文トークンインデックスを再構築」コマンドで即座に" +
-    "再構築することもできます。日本語のVaultでは、下の日本語分かち書きも" +
-    "有効にしてください。",
+    "再構築することもできます。",
   settingBodyTokenEnable: "本文トークンマッチングを有効化",
-  settingSegmenterName: "日本語分かち書き(日本語Vaultにおすすめ)",
+  settingSegmenterName: "日本語分かち書き(デフォルトで有効)",
   settingSegmenterDesc:
     "TinySegmenter(オフライン・辞書不要)を使って日本語のテキストを単語に分割します。" +
     "これにより「打ち合わせ」「読み込み」のような送り仮名を含む単語や、" +
     "「ひらめき」のようなひらがなの単語も共有語彙として認識されるようになります。" +
     "これを有効にしないと、こうした単語は本文トークンマッチングから見えないままです。" +
-    "この設定を変更するとインデックスが再構築されます。",
+    "デフォルトで有効です。日本語をあまり含まないVaultでは、これをオフにすると" +
+    "インデックス作成が速くなります。この設定を変更するとインデックスが再構築されます。",
   settingBodyTokenWeight: "本文トークンの重み",
   settingTopN: "ノートごとの重要トークン数",
   descRebuildsIndex: "この設定を変更するとインデックスが再構築されます。",

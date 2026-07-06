@@ -209,9 +209,9 @@ export const JA_MIXED_STOPWORDS: Set<string> = new Set([
 // ============================================================================
 // KANJI_STOPWORDS — closed-class gate on the plain kanji-run path
 // (addKanjiRun in tokenize.ts). Unlike the three sets above, this one applies
-// unconditionally — even with bodyTokenSegmenterEnabled OFF (the default) —
-// because the kanji-run regex path always runs. This is the first JA
-// vocabulary gate that has any effect in the default (segmenter-off) config.
+// unconditionally — even with bodyTokenSegmenterEnabled off — because the
+// kanji-run regex path always runs. This is the only JA vocabulary gate that
+// has any effect when the segmenter is off.
 //
 // Kept deliberately tiny and exact-match-only (no length gate, no df
 // threshold): both sub-groups are closed classes with no plausible
