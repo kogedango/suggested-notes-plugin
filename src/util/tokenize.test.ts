@@ -9,17 +9,46 @@ describe("tokenize", () => {
     expect(out.has("foo")).toBe(true);
   });
 
-  it("requires minimum length of 3 for ascii", () => {
-    const out = tokenize("ab abc abcd");
+  it("requires minimum length of 3 for ascii except uppercase acronyms", () => {
+    const out = tokenize("ab abc abcd AI ML");
     expect(out.has("ab")).toBe(false);
     expect(out.has("abc")).toBe(true);
     expect(out.has("abcd")).toBe(true);
+    expect(out.has("ai")).toBe(true);
+    expect(out.has("ml")).toBe(true);
+  });
+
+  it("keeps longer ascii tokens whole and does not find uppercase pairs inside words", () => {
+    const out = tokenize("AIX machineID ABCD");
+    expect(out.has("aix")).toBe(true);
+    expect(out.has("ai")).toBe(false);
+    expect(out.has("machineid")).toBe(true);
+    expect(out.has("id")).toBe(false);
+    expect(out.has("abcd")).toBe(true);
+  });
+
+  it("still does not emit lowercase two-letter function words", () => {
+    const out = tokenize("in of");
+    expect(out.has("in")).toBe(false);
+    expect(out.has("of")).toBe(false);
   });
 
   it("drops ascii stopwords", () => {
     const out = tokenize("the quick brown fox jumps over the lazy dog");
     expect(out.has("the")).toBe(false);
     expect(out.has("quick")).toBe(true);
+  });
+
+  it("adds no source stopwords for the two-letter acronym path", () => {
+    // These read as date/time format placeholders, but each also has a real
+    // topical reading in some vault (SS: screenshot, DD: due diligence, OK: UI
+    // copy). A stopword entry is global and unrecoverable, while the df >= 2 /
+    // df <= 40% salience gates already suppress genuine format-string noise —
+    // so the acronym path ships without widening this file.
+    const out = tokenize("MM DD YY HH SS OK AA AB");
+    for (const kept of ["mm", "dd", "yy", "hh", "ss", "ok", "aa", "ab"]) {
+      expect(out.has(kept)).toBe(true);
+    }
   });
 
   it("extracts katakana of length >= 2", () => {
@@ -107,6 +136,12 @@ describe("tokenize", () => {
     const out = tokenize("リチウムバッテリー");
     expect(out.has("リチウム")).toBe(true);
     expect(out.has("バッテリ")).toBe(true);
+  });
+
+  it("counts each normalized katakana sub-word once per parent-run occurrence", () => {
+    const standalone = new Set(["サーバ"]);
+    expect(tokenize("クラウドサーバー", false, standalone).get("サーバ")).toBe(1);
+    expect(tokenize("クラウドサーバー クラウドサーバー", false, standalone).get("サーバ")).toBe(2);
   });
 
   it("harvests standalone-word units (kanji 2-grams, katakana words) via the 4th arg", () => {
@@ -223,6 +258,11 @@ describe("tokenize", () => {
     // biasing salience toward 2-char kanji words.
     expect(tokenize("関連").get("関連")).toBe(1);
     expect(tokenize("関連の話。また関連について。").get("関連")).toBe(2);
+  });
+
+  it("counts a repeated kanji bigram once per parent-run occurrence", () => {
+    expect(tokenize("代々木代々木").get("代々")).toBe(1);
+    expect(tokenize("代々木代々木 代々木代々木").get("代々")).toBe(2);
   });
 
   it("strips bare URLs without eating adjacent Japanese text", () => {

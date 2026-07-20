@@ -5,7 +5,16 @@
 // vocabulary, conjugation fragments, closed-class pronouns, URL fragments, or
 // honorific suffixes. High-frequency words that are specific to a particular
 // vault or domain are NOT this file's problem — they belong in the
-// user-facing `excludedBodyTokens` setting. Do not add a word whose ren'yōkei
+// user-facing `excludedBodyTokens` setting.
+//
+// The rule has teeth because the two directions are not symmetric. An entry
+// here is global and unrecoverable: no user setting can add a word back once
+// this file removes it. Leaving a noisy word out is recoverable — the df >= 2
+// and df <= 40%-of-vault salience gates and IDF already suppress anything
+// genuinely high-frequency, and `excludedBodyTokens` handles the rest per
+// vault. So when a word has any plausible topical reading in SOME vault, it
+// stays out of this file even if it is noise in the vault at hand.
+// Do not add a word whose ren'yōkei
 // (連用形) form can nominalize into real, potentially topical vocabulary
 // (学び, 違い, 扱い, 買い, and the like) — see the "audit-confirmed removals"
 // note on JA_MIXED_STOPWORDS below for the 16 entries that were purged from
@@ -48,6 +57,12 @@ const ASCII_G3_QUANTIFIERS = ["all", "any"];
 // stripping, not natural-language vocabulary in any domain.
 const ASCII_URL_FRAGMENTS = ["http", "https", "www", "com", "org", "net"];
 
+// Considered and rejected: MM/DD/YY/HH/SS and OK, which the uppercase
+// two-letter token path admits. Each reads as a date/time format placeholder,
+// but each also has a real topical reading somewhere — SS (screenshot,
+// stainless, 二次創作), DD (due diligence, the dd command), OK (UI copy). By
+// the asymmetry above they stay out: a format string like HH:MM:SS produces
+// tokens with vault-wide df, which the salience gates already suppress.
 // Borderline, kept (tmp/b3b-audit.md): "use"/"using"/"used" are not in the
 // NLTK canonical list, and "used car"/"use case" could conceivably topicalize
 // in a specific vault. But they are the direct English counterpart of the JA

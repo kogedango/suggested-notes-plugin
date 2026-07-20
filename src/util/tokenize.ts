@@ -6,7 +6,10 @@ import {
   KANJI_STOPWORDS,
 } from "../data/stopwords";
 
-const TOKEN_RE = /[A-Za-z][A-Za-z0-9_\-]{2,}|[ァ-ヶー]{2,}|[一-龥々]{2,}/gu;
+// Keep the general 3+ ASCII branch before the 2-letter acronym exception so
+// AIX/ABCD stay whole. ASCII-token boundaries keep the exception from finding
+// suffixes inside identifiers such as machineID.
+const TOKEN_RE = /[A-Za-z][A-Za-z0-9_\-]{2,}|(?<![A-Za-z0-9_\-])[A-Z]{2}(?![A-Za-z0-9_\-])|[ァ-ヶー]{2,}|[一-龥々]{2,}/gu;
 
 // ASCII_STOPWORDS / JA_STOPWORDS / JA_MIXED_STOPWORDS / KANJI_STOPWORDS are
 // defined in src/data/stopwords.ts, organized by vault-independent rationale
@@ -135,13 +138,18 @@ function addKatakanaRun(
   // harvest it so longer runs elsewhere can split on it.
   if (collectInto) collectInto.add(full);
 
+  const derived = new Set<string>();
   for (let i = 0; i < run.length; i++) {
     for (let j = i + KATAKANA_SUBWORD_MIN; j <= run.length; j++) {
       const sub = normalizeKatakana(run.slice(i, j));
       if (!sub || sub.length < KATAKANA_SUBWORD_MIN || sub === full) continue;
-      if (!standalone || standalone.has(sub)) bump(out, sub);
+      if (!standalone || standalone.has(sub)) derived.add(sub);
     }
   }
+  // Different raw slices can normalize to the same token (サーバ/サーバー).
+  // Count each derived token once for this parent-run occurrence, while a
+  // later occurrence of the same parent run still contributes another bump.
+  for (const sub of derived) bump(out, sub);
 }
 
 // Greedy script-run matching glues kanji compounds together (機械学習基盤 is
@@ -175,14 +183,18 @@ function addKanjiRun(
   if (!KANJI_STOPWORDS.has(run)) bump(out, run);
   // A length-2 kanji run standing on its own is our standalone-word proxy.
   if (collectInto && run.length === 2) collectInto.add(run);
+  const derived = new Set<string>();
   for (let i = 0; i + 2 <= run.length; i++) {
     const bg = run.slice(i, i + 2);
     // A 2-char run is its own only 2-gram — already bumped as the full run
     // above (mirrors the katakana path's `sub === full` guard).
     if (bg === run) continue;
     if (KANJI_STOPWORDS.has(bg)) continue;
-    if (!standalone || standalone.has(bg)) bump(out, bg);
+    if (!standalone || standalone.has(bg)) derived.add(bg);
   }
+  // A repeated raw bigram inside one run is still one derived sub-unit of that
+  // parent-run occurrence; separate parent-run occurrences remain separate TF.
+  for (const bg of derived) bump(out, bg);
 }
 
 let segmenter: TinySegmenter | null = null;
