@@ -39,6 +39,30 @@ describe("tokenize", () => {
     expect(out.has("quick")).toBe(true);
   });
 
+  it("gates the inflected surface forms of already-gated relational verbs", () => {
+    // 含む / 関する / に関する are gated as functional. The segmenter emits
+    // 含ん, 関し and に関し for their inflected forms, which leaked through and
+    // carried the IDF of a df-26 topical word. Gating them closes that leak;
+    // it is not a general rule about conjugation fragments.
+    expect(tokenize("税を含んだ価格", true).has("含ん")).toBe(false);
+    expect(tokenize("手数料を含んで計算", true).has("含ん")).toBe(false);
+    expect(tokenize("本件に関し検討する", true).has("関し")).toBe(false);
+    expect(tokenize("この件に関して報告する", true).has("に関し")).toBe(false);
+    // The surrounding content words must survive.
+    expect(tokenize("税を含んだ価格", true).has("価格")).toBe(true);
+    expect(tokenize("本件に関し検討する", true).has("検討")).toBe(true);
+  });
+
+  it("keeps fragments that still carry the source verb's topical sense", () => {
+    // 死ん / 置い / 見て / 変わら / 思わ are not independent words either, but
+    // "not a word" is not "no topical signal" — a vault about death, storage or
+    // observation can legitimately match on them. A stopword entry is global
+    // and unrecoverable, so they stay out.
+    expect(tokenize("猫が死んだ", true).has("死ん")).toBe(true);
+    expect(tokenize("棚に置いた", true).has("置い")).toBe(true);
+    expect(tokenize("映画を見て", true).has("見て")).toBe(true);
+  });
+
   it("adds no source stopwords for the two-letter acronym path", () => {
     // These read as date/time format placeholders, but each also has a real
     // topical reading in some vault (SS: screenshot, DD: due diligence, OK: UI

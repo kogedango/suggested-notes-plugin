@@ -14,6 +14,22 @@
 // genuinely high-frequency, and `excludedBodyTokens` handles the rest per
 // vault. So when a word has any plausible topical reading in SOME vault, it
 // stays out of this file even if it is noise in the vault at hand.
+//
+// KNOWN TENSION: the G2 group below predates that rule and does not satisfy
+// it. 高い, 強い, 感じ, 調べ, 起き are open-class words with obvious topical
+// readings (price, intensity, impression, investigation). They were kept on a
+// different basis — that the basic-verb reading dominates in general PKM prose
+// — which is a judgement about the average vault, exactly what the rule above
+// rejects. The rule governs ADDITIONS from now on; whether to shrink G2 to
+// match is an open decision, not an oversight. Removing entries is the
+// recoverable direction, so it is safe to defer.
+//
+// 含む/含ん belong to that deferred audit as a pair. 含ん was added to match
+// 含む, which is correct as consistency, but consistency inherits whatever
+// justification the parent had — and 含む rests on the same average-vault
+// judgement the rule rejects. Reverting 含ん alone would only re-open the leak,
+// so either both stay or both go, and "both go" is a decision about G2, not
+// about 含ん.
 // Do not add a word whose ren'yōkei
 // (連用形) form can nominalize into real, potentially topical vocabulary
 // (学び, 違い, 扱い, 買い, and the like) — see the "audit-confirmed removals"
@@ -184,7 +200,12 @@ const JA_MIXED_G2_BASIC_VOCAB = [
   "与える", "入れる", "感じる", "持つ", "良い", "入る", "求める", "新しく",
   "書き", "分かり",
   // Borderline, kept (see comment above): N3 generic relational verbs.
-  "含む", "示す",
+  // 含ん is the onbin stem the segmenter emits for 含んだ/含んで. It is not a
+  // leniency about fragments in general — it closes a leak in the decision
+  // already made about 含む, which this file gates as functional. 含ん has no
+  // independent noun sense in any domain, so the unrecoverability rule in the
+  // header does not protect it.
+  "含む", "示す", "含ん",
   // Borderline, kept (tmp/b3b-audit.md): ren'yōkei of N5/N4 basic verbs
   // (感じる/調べる/覚える/借りる/求める/合わせる/起きる). Each has a dictionary
   // independent-noun sense too (感じ=impression, 調べ=investigation, 起き=waking),
@@ -205,9 +226,14 @@ const JA_MIXED_G3_DEICTIC_DEGREE = [
 
 // G4 文法構文: particle-equivalent phrases (に対し/に関する/による-family) and
 // support-verb / suffix constructions (関する/行う/済み/向け/応じ/加え/その後/と共に).
+// 関し / に関し are the ren'yōkei surface forms the segmenter returns for
+// 〜に関して / 〜に関し — the same relational construction 関する and に関する
+// are already gated as. Both surface forms occur (本件に関し検討 yields 関し,
+// この件に関して yields に関し), so gating only one leaves the other indexed.
 const JA_MIXED_G4_GRAMMAR = [
   "向け", "に対し", "関する", "済み", "行う", "応じ", "加え",
   "その後", "と共に", "に関する", "に対して", "に対する", "及び",
+  "関し", "に関し",
 ];
 
 // G5 閉クラス代名詞: personal pronoun.
