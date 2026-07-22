@@ -28,11 +28,13 @@ const HIRAGANA_SUBWORD_MIN = 3;
 export const HIRAGANA_SUBWORD_MAX = 8;
 const HIRAGANA_RUN_RE = /[ぁ-んー]{3,}/gu;
 
-// NFKC folds full-width ASCII, half-width katakana, and decomposed kana into
-// their canonical forms so "Ｏbsidian"/"ﾉｰﾄ" tokenize the same as the plain
-// forms, then markdown/frontmatter/code/links are stripped so only prose text
-// reaches the matcher.
-function strip(body: string): string {
+// Shared preprocessing contract for every token-emission lane. It is applied
+// exactly once by tokenizeWithOptions before lanes inspect the text. NFKC folds
+// full-width ASCII, half-width katakana, and decomposed kana into their
+// canonical forms so "Ｏbsidian"/"ﾉｰﾄ" tokenize the same as the plain forms,
+// then markdown/frontmatter/code/links are stripped so only prose text reaches
+// the matchers.
+export function preprocessTokenizableText(body: string): string {
   return body
     .normalize("NFKC")
     .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
@@ -51,6 +53,19 @@ function strip(body: string): string {
     // only, so require at least one letter/underscore somewhere — a bare "#1"
     // is an issue reference, not a tag.
     .replace(/(^|[\s(])#(?=[\p{N}\-/]*[\p{L}_])[\p{L}\p{N}_\-/]+/gu, " ");
+}
+
+export interface TokenizeOptions {
+  segment?: boolean;
+  corpus?: {
+    standalone?: ReadonlySet<string>;
+    hiraganaDictionary?: ReadonlySet<string>;
+  };
+  collectors?: {
+    standalone?: Set<string>;
+    hiraganaVocabulary?: Set<string>;
+    hiraganaRepairs?: Map<string, number>;
+  };
 }
 
 // `segment` (corresponds to the bodyTokenSegmenterEnabled setting, ON by
@@ -98,10 +113,57 @@ export function tokenize(
   collectHiraganaInto?: Set<string>,
   collectHiraganaRepairsInto?: Map<string, number>,
 ): Map<string, number> {
-  const stripped = strip(body);
+  return tokenizeWithOptions(body, {
+    segment,
+    corpus: {
+      standalone,
+      hiraganaDictionary,
+    },
+    collectors: {
+      standalone: collectStandaloneInto,
+      hiraganaVocabulary: collectHiraganaInto,
+      hiraganaRepairs: collectHiraganaRepairsInto,
+    },
+  });
+}
 
+// Options-based entry point for tokenizer extensions. Keeping corpus-derived
+// vocabulary separate from pass-local collectors makes each lane explicit and
+// leaves room for additive lanes (for example lexical aliases) without growing
+// tokenize()'s positional API. tokenize() remains the compatibility wrapper.
+export function tokenizeWithOptions(
+  body: string,
+  options: TokenizeOptions = {},
+): Map<string, number> {
+  const preprocessed = preprocessTokenizableText(body);
   const out = new Map<string, number>();
-  for (const m of stripped.matchAll(TOKEN_RE)) {
+
+  addScriptRunTokens(
+    out,
+    preprocessed,
+    options.corpus?.standalone,
+    options.collectors?.standalone,
+  );
+
+  if (options.segment) {
+    addSegmenterLane(
+      out,
+      preprocessed,
+      options.corpus?.hiraganaDictionary,
+      options.collectors?.hiraganaVocabulary,
+      options.collectors?.hiraganaRepairs,
+    );
+  }
+  return out;
+}
+
+function addScriptRunTokens(
+  out: Map<string, number>,
+  preprocessed: string,
+  standalone?: ReadonlySet<string>,
+  collectStandaloneInto?: Set<string>,
+): void {
+  for (const m of preprocessed.matchAll(TOKEN_RE)) {
     const tok = m[0];
     const first = tok[0];
     if (/[A-Za-z]/.test(first)) {
@@ -113,25 +175,31 @@ export function tokenize(
       addKanjiRun(out, tok, standalone, collectStandaloneInto);
     }
   }
-  if (segment) {
-    const segmentedHiraganaSpans = addSegmented(
-      out,
-      stripped,
-      collectHiraganaInto,
+}
+
+function addSegmenterLane(
+  out: Map<string, number>,
+  preprocessed: string,
+  hiraganaDictionary?: ReadonlySet<string>,
+  collectHiraganaInto?: Set<string>,
+  collectHiraganaRepairsInto?: Map<string, number>,
+): void {
+  const segmentedHiraganaSpans = addSegmented(
+    out,
+    preprocessed,
+    collectHiraganaInto,
+  );
+  // Plain segmenter calls preserve their historical behavior. Provisional
+  // over-generation is corpus-pass-1-only (signalled by a collector), while
+  // query/refresh repair is enabled by a frozen dictionary.
+  if (hiraganaDictionary || collectHiraganaInto) {
+    addHiraganaRepairs(
+      collectHiraganaRepairsInto ?? out,
+      preprocessed,
+      hiraganaDictionary,
+      segmentedHiraganaSpans,
     );
-    // Plain segmenter calls preserve their historical behavior. Provisional
-    // over-generation is corpus-pass-1-only (signalled by a collector), while
-    // query/refresh repair is enabled by a frozen dictionary.
-    if (hiraganaDictionary || collectHiraganaInto) {
-      addHiraganaRepairs(
-        collectHiraganaRepairsInto ?? out,
-        stripped,
-        hiraganaDictionary,
-        segmentedHiraganaSpans,
-      );
-    }
   }
-  return out;
 }
 
 function bump(out: Map<string, number>, key: string): void {
@@ -160,7 +228,7 @@ function normalizeKatakana(tok: string): string | null {
 function addKatakanaRun(
   out: Map<string, number>,
   run: string,
-  standalone?: Set<string>,
+  standalone?: ReadonlySet<string>,
   collectInto?: Set<string>,
 ): void {
   const full = normalizeKatakana(run);
@@ -209,7 +277,7 @@ function addKatakanaRun(
 function addKanjiRun(
   out: Map<string, number>,
   run: string,
-  standalone?: Set<string>,
+  standalone?: ReadonlySet<string>,
   collectInto?: Set<string>,
 ): void {
   if (!KANJI_STOPWORDS.has(run)) bump(out, run);
@@ -243,7 +311,7 @@ function spanKey(start: number, end: number, token: string): string {
 function addHiraganaRepairs(
   out: Map<string, number>,
   stripped: string,
-  dictionary: Set<string> | undefined,
+  dictionary: ReadonlySet<string> | undefined,
   segmentedSpans: Set<string>,
 ): void {
   for (const match of stripped.matchAll(HIRAGANA_RUN_RE)) {

@@ -1,7 +1,97 @@
 import { describe, expect, it } from "vitest";
-import { tokenize } from "./tokenize";
+import {
+  preprocessTokenizableText,
+  tokenize,
+  tokenizeWithOptions,
+} from "./tokenize";
 
 describe("tokenize", () => {
+  it("keeps the options API equivalent to every legacy input and collector", () => {
+    const text = "---\ntitle: hidden\n---\n機械学習 リチウムバッテリー なっていたみかんを Obsidian";
+    const standalone = new Set(["機械", "学習", "バッテリ"]);
+    const hiraganaDictionary = new Set(["みかん"]);
+    const legacyStandalone = new Set<string>();
+    const optionsStandalone = new Set<string>();
+    const legacyHiragana = new Set<string>();
+    const optionsHiragana = new Set<string>();
+    const legacyRepairs = new Map<string, number>();
+    const optionsRepairs = new Map<string, number>();
+
+    const legacy = tokenize(
+      text,
+      true,
+      standalone,
+      legacyStandalone,
+      hiraganaDictionary,
+      legacyHiragana,
+      legacyRepairs,
+    );
+    const options = tokenizeWithOptions(text, {
+      segment: true,
+      corpus: { standalone, hiraganaDictionary },
+      collectors: {
+        standalone: optionsStandalone,
+        hiraganaVocabulary: optionsHiragana,
+        hiraganaRepairs: optionsRepairs,
+      },
+    });
+
+    expect(options).toEqual(legacy);
+    expect(optionsStandalone).toEqual(legacyStandalone);
+    expect(optionsHiragana).toEqual(legacyHiragana);
+    expect(optionsRepairs).toEqual(legacyRepairs);
+  });
+
+  it("exposes the same preprocessing boundary used by every token lane", () => {
+    const preprocessed = preprocessTokenizableText(
+      "---\ntitle: Secret\n---\nＯｂｓｉｄｉａｎ `hidden` [表示](https://example.com)",
+    );
+    expect(preprocessed).not.toContain("Secret");
+    expect(preprocessed).not.toContain("hidden");
+    expect(preprocessed).not.toContain("https://example.com");
+    expect(preprocessed).toContain("Obsidian");
+    expect(preprocessed).toContain("表示");
+  });
+
+  it("distinguishes an unknown standalone vocabulary from a known empty one", () => {
+    const ungated = tokenizeWithOptions("日本語");
+    const gated = tokenizeWithOptions("日本語", {
+      corpus: { standalone: new Set() },
+    });
+
+    expect(ungated.has("日本")).toBe(true);
+    expect(ungated.has("本語")).toBe(true);
+    expect(gated.has("日本語")).toBe(true);
+    expect(gated.has("日本")).toBe(false);
+    expect(gated.has("本語")).toBe(false);
+  });
+
+  it("routes hiragana repairs exclusively to their collector when provided", () => {
+    const repairs = new Map<string, number>();
+    const out = tokenizeWithOptions("なっていたみかんを取った", {
+      segment: true,
+      corpus: { hiraganaDictionary: new Set(["みかん"]) },
+      collectors: { hiraganaRepairs: repairs },
+    });
+
+    expect(out.has("みかん")).toBe(false);
+    expect(repairs.get("みかん")).toBe(1);
+  });
+
+  it("does not run segmenter collectors when segmentation is disabled", () => {
+    const hiraganaVocabulary = new Set<string>();
+    const hiraganaRepairs = new Map<string, number>();
+    const out = tokenizeWithOptions("なっていたみかんを取った", {
+      segment: false,
+      corpus: { hiraganaDictionary: new Set(["みかん"]) },
+      collectors: { hiraganaVocabulary, hiraganaRepairs },
+    });
+
+    expect(out.has("みかん")).toBe(false);
+    expect(hiraganaVocabulary.size).toBe(0);
+    expect(hiraganaRepairs.size).toBe(0);
+  });
+
   it("extracts ascii words, lowercased", () => {
     const out = tokenize("Hello World Foo");
     expect(out.has("hello")).toBe(true);
