@@ -6,7 +6,10 @@ import {
   KANJI_STOPWORDS,
 } from "../data/stopwords";
 
-const TOKEN_RE = /[A-Za-z][A-Za-z0-9_\-]{2,}|[ァ-ヶー]{2,}|[一-龥々]{2,}/gu;
+// Keep the general 3+ ASCII branch before the 2-letter acronym exception so
+// AIX/ABCD stay whole. ASCII-token boundaries keep the exception from finding
+// suffixes inside identifiers such as machineID.
+const TOKEN_RE = /[A-Za-z][A-Za-z0-9_\-]{2,}|(?<![A-Za-z0-9_\-])[A-Z]{2}(?![A-Za-z0-9_\-])|[ァ-ヶー]{2,}|[一-龥々]{2,}/gu;
 
 // ASCII_STOPWORDS / JA_STOPWORDS / JA_MIXED_STOPWORDS / KANJI_STOPWORDS are
 // defined in src/data/stopwords.ts, organized by vault-independent rationale
@@ -22,11 +25,13 @@ const TOKEN_RE = /[A-Za-z][A-Za-z0-9_\-]{2,}|[ァ-ヶー]{2,}|[一-龥々]{2,}/g
 // they stand alone (the full run is always emitted regardless of this gate).
 const KATAKANA_SUBWORD_MIN = 3;
 
-// NFKC folds full-width ASCII, half-width katakana, and decomposed kana into
-// their canonical forms so "Ｏbsidian"/"ﾉｰﾄ" tokenize the same as the plain
-// forms, then markdown/frontmatter/code/links are stripped so only prose text
-// reaches the matcher.
-function strip(body: string): string {
+// Shared preprocessing contract for every token-emission lane. It is applied
+// exactly once by tokenizeWithOptions before lanes inspect the text. NFKC folds
+// full-width ASCII, half-width katakana, and decomposed kana into their
+// canonical forms so "Ｏbsidian"/"ﾉｰﾄ" tokenize the same as the plain forms,
+// then markdown/frontmatter/code/links are stripped so only prose text reaches
+// the matchers.
+export function preprocessTokenizableText(body: string): string {
   return body
     .normalize("NFKC")
     .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
@@ -45,6 +50,16 @@ function strip(body: string): string {
     // only, so require at least one letter/underscore somewhere — a bare "#1"
     // is an issue reference, not a tag.
     .replace(/(^|[\s(])#(?=[\p{N}\-/]*[\p{L}_])[\p{L}\p{N}_\-/]+/gu, " ");
+}
+
+export interface TokenizeOptions {
+  segment?: boolean;
+  corpus?: {
+    standalone?: ReadonlySet<string>;
+  };
+  collectors?: {
+    standalone?: Set<string>;
+  };
 }
 
 // `segment` (corresponds to the bodyTokenSegmenterEnabled setting, ON by
@@ -80,10 +95,42 @@ export function tokenize(
   standalone?: Set<string>,
   collectStandaloneInto?: Set<string>,
 ): Map<string, number> {
-  const stripped = strip(body);
+  return tokenizeWithOptions(body, {
+    segment,
+    corpus: { standalone },
+    collectors: { standalone: collectStandaloneInto },
+  });
+}
 
+// Options-based entry point for tokenizer extensions. Keeping corpus-derived
+// vocabulary separate from pass-local collectors makes each lane explicit and
+// leaves room for additive lanes (for example lexical aliases) without growing
+// tokenize()'s positional API. tokenize() remains the compatibility wrapper.
+export function tokenizeWithOptions(
+  body: string,
+  options: TokenizeOptions = {},
+): Map<string, number> {
+  const preprocessed = preprocessTokenizableText(body);
   const out = new Map<string, number>();
-  for (const m of stripped.matchAll(TOKEN_RE)) {
+
+  addScriptRunTokens(
+    out,
+    preprocessed,
+    options.corpus?.standalone,
+    options.collectors?.standalone,
+  );
+
+  if (options.segment) addSegmented(out, preprocessed);
+  return out;
+}
+
+function addScriptRunTokens(
+  out: Map<string, number>,
+  preprocessed: string,
+  standalone?: ReadonlySet<string>,
+  collectStandaloneInto?: Set<string>,
+): void {
+  for (const m of preprocessed.matchAll(TOKEN_RE)) {
     const tok = m[0];
     const first = tok[0];
     if (/[A-Za-z]/.test(first)) {
@@ -95,8 +142,6 @@ export function tokenize(
       addKanjiRun(out, tok, standalone, collectStandaloneInto);
     }
   }
-  if (segment) addSegmented(out, stripped);
-  return out;
 }
 
 function bump(out: Map<string, number>, key: string): void {
@@ -125,7 +170,7 @@ function normalizeKatakana(tok: string): string | null {
 function addKatakanaRun(
   out: Map<string, number>,
   run: string,
-  standalone?: Set<string>,
+  standalone?: ReadonlySet<string>,
   collectInto?: Set<string>,
 ): void {
   const full = normalizeKatakana(run);
@@ -135,13 +180,18 @@ function addKatakanaRun(
   // harvest it so longer runs elsewhere can split on it.
   if (collectInto) collectInto.add(full);
 
+  const derived = new Set<string>();
   for (let i = 0; i < run.length; i++) {
     for (let j = i + KATAKANA_SUBWORD_MIN; j <= run.length; j++) {
       const sub = normalizeKatakana(run.slice(i, j));
       if (!sub || sub.length < KATAKANA_SUBWORD_MIN || sub === full) continue;
-      if (!standalone || standalone.has(sub)) bump(out, sub);
+      if (!standalone || standalone.has(sub)) derived.add(sub);
     }
   }
+  // Different raw slices can normalize to the same token (サーバ/サーバー).
+  // Count each derived token once for this parent-run occurrence, while a
+  // later occurrence of the same parent run still contributes another bump.
+  for (const sub of derived) bump(out, sub);
 }
 
 // Greedy script-run matching glues kanji compounds together (機械学習基盤 is
@@ -169,20 +219,24 @@ function addKatakanaRun(
 function addKanjiRun(
   out: Map<string, number>,
   run: string,
-  standalone?: Set<string>,
+  standalone?: ReadonlySet<string>,
   collectInto?: Set<string>,
 ): void {
   if (!KANJI_STOPWORDS.has(run)) bump(out, run);
   // A length-2 kanji run standing on its own is our standalone-word proxy.
   if (collectInto && run.length === 2) collectInto.add(run);
+  const derived = new Set<string>();
   for (let i = 0; i + 2 <= run.length; i++) {
     const bg = run.slice(i, i + 2);
     // A 2-char run is its own only 2-gram — already bumped as the full run
     // above (mirrors the katakana path's `sub === full` guard).
     if (bg === run) continue;
     if (KANJI_STOPWORDS.has(bg)) continue;
-    if (!standalone || standalone.has(bg)) bump(out, bg);
+    if (!standalone || standalone.has(bg)) derived.add(bg);
   }
+  // A repeated raw bigram inside one run is still one derived sub-unit of that
+  // parent-run occurrence; separate parent-run occurrences remain separate TF.
+  for (const bg of derived) bump(out, bg);
 }
 
 let segmenter: TinySegmenter | null = null;

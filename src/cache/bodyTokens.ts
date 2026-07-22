@@ -254,33 +254,57 @@ function isInteriorArtifact(token: string, standalone: Set<string>): boolean {
   return false;
 }
 
+// Low-df reserve: after the top-N cut, a small extra allowance for the note's
+// rarest eligible tokens (df <= RESERVE_DF_MAX) that the cut evicted. A long,
+// vocabulary-rich note can push a genuinely rare shared word out of its top-N
+// when high-TF mid-frequency words fill the budget (body-recall-hiragana-
+// decision-2026-07-22.md, mechanism 2). The reserve recovers those without
+// enlarging the budget for common words. It is *purely additive* — the
+// returned set is always a superset of the top-N — so it can only add shared
+// candidate pairs, never remove one (non-destructive by construction, since it
+// touches neither df nor totalNotes, which are fixed before ranking).
+const RESERVE_DF_MAX = 10;
+const RESERVE_SIZE = 20;
+
 // Rank a note's tokens (with their in-body occurrence counts) against the
 // given doc-freq table and keep the top-N by log(1+TF) * IDF, so a token the
 // note repeats beats an equally-rare token it only mentions once (design-
 // review-2026-07-02 #5) while df/IDF themselves stay presence-based (0/1 per
 // note) — TF only decides which tokens make the cut, not what "rare" means.
-// Pure: used both for corpus builds (against the under-construction df) and
-// for live queries (against the current corpus df). Exported for direct unit
-// testing of the ranking formula.
+// Plus a bounded low-df reserve (see RESERVE_DF_MAX above). Pure: used both for
+// corpus builds (against the under-construction df) and for live queries
+// (against the current corpus df). Exported for direct unit testing.
 export function rankSalient(
   tokens: Map<string, number>,
   topN: number,
   df: Map<string, number>,
   totalNotes: number,
+  reserveDfMax = RESERVE_DF_MAX,
+  reserveSize = RESERVE_SIZE,
 ): Set<string> {
   const maxDf = Math.max(2, Math.floor(totalNotes * 0.4));
-  const ranked: Array<{ t: string; score: number }> = [];
+  const ranked: Array<{ t: string; n: number; score: number }> = [];
   for (const [t, tf] of tokens) {
     const n = df.get(t) ?? 0;
     if (n < 2) continue; // singletons can't produce shared signal
     if (n > maxDf) continue; // stop-word-like
     const idf = Math.log(totalNotes / n);
-    ranked.push({ t, score: Math.log(1 + tf) * idf });
+    ranked.push({ t, n, score: Math.log(1 + tf) * idf });
   }
   ranked.sort((a, b) => b.score - a.score);
 
   const set = new Set<string>();
   for (const r of ranked.slice(0, topN)) set.add(r.t);
+  // Reserve pass over the tokens the top-N cut evicted (already score-sorted,
+  // so the most salient rare ones come first): keep only the genuinely rare
+  // (df <= reserveDfMax), up to reserveSize. Adds to the top-N set, never
+  // removes from it.
+  let reserved = 0;
+  for (let i = topN; i < ranked.length && reserved < reserveSize; i++) {
+    if (ranked[i].n > reserveDfMax) continue;
+    set.add(ranked[i].t);
+    reserved++;
+  }
   return set;
 }
 

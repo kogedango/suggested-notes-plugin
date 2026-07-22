@@ -8,7 +8,8 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "typecheck": "tsc -noEmit -skipLibCheck",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "report:tokenizer-contrast": "PRINT_TOKENIZER_CONTRAST_REPORT=1 vitest run src/util/tokenizeContrast.report.test.ts --disableConsoleIntercept"
   },
   "keywords": [
     "obsidian",

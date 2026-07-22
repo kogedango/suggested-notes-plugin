@@ -1,7 +1,52 @@
 import { describe, expect, it } from "vitest";
-import { tokenize } from "./tokenize";
+import {
+  preprocessTokenizableText,
+  tokenize,
+  tokenizeWithOptions,
+} from "./tokenize";
 
 describe("tokenize", () => {
+  it("keeps the options API equivalent to the legacy positional inputs", () => {
+    const text = "---\ntitle: hidden\n---\n機械学習 リチウムバッテリー Obsidian";
+    const standalone = new Set(["機械", "学習", "バッテリ"]);
+    const legacyStandalone = new Set<string>();
+    const optionsStandalone = new Set<string>();
+
+    const legacy = tokenize(text, true, standalone, legacyStandalone);
+    const options = tokenizeWithOptions(text, {
+      segment: true,
+      corpus: { standalone },
+      collectors: { standalone: optionsStandalone },
+    });
+
+    expect(options).toEqual(legacy);
+    expect(optionsStandalone).toEqual(legacyStandalone);
+  });
+
+  it("exposes the same preprocessing boundary used by every token lane", () => {
+    const preprocessed = preprocessTokenizableText(
+      "---\ntitle: Secret\n---\nＯｂｓｉｄｉａｎ `hidden` [表示](https://example.com)",
+    );
+    expect(preprocessed).not.toContain("Secret");
+    expect(preprocessed).not.toContain("hidden");
+    expect(preprocessed).not.toContain("https://example.com");
+    expect(preprocessed).toContain("Obsidian");
+    expect(preprocessed).toContain("表示");
+  });
+
+  it("distinguishes an unknown standalone vocabulary from a known empty one", () => {
+    const ungated = tokenizeWithOptions("日本語");
+    const gated = tokenizeWithOptions("日本語", {
+      corpus: { standalone: new Set() },
+    });
+
+    expect(ungated.has("日本")).toBe(true);
+    expect(ungated.has("本語")).toBe(true);
+    expect(gated.has("日本語")).toBe(true);
+    expect(gated.has("日本")).toBe(false);
+    expect(gated.has("本語")).toBe(false);
+  });
+
   it("extracts ascii words, lowercased", () => {
     const out = tokenize("Hello World Foo");
     expect(out.has("hello")).toBe(true);
@@ -9,17 +54,70 @@ describe("tokenize", () => {
     expect(out.has("foo")).toBe(true);
   });
 
-  it("requires minimum length of 3 for ascii", () => {
-    const out = tokenize("ab abc abcd");
+  it("requires minimum length of 3 for ascii except uppercase acronyms", () => {
+    const out = tokenize("ab abc abcd AI ML");
     expect(out.has("ab")).toBe(false);
     expect(out.has("abc")).toBe(true);
     expect(out.has("abcd")).toBe(true);
+    expect(out.has("ai")).toBe(true);
+    expect(out.has("ml")).toBe(true);
+  });
+
+  it("keeps longer ascii tokens whole and does not find uppercase pairs inside words", () => {
+    const out = tokenize("AIX machineID ABCD");
+    expect(out.has("aix")).toBe(true);
+    expect(out.has("ai")).toBe(false);
+    expect(out.has("machineid")).toBe(true);
+    expect(out.has("id")).toBe(false);
+    expect(out.has("abcd")).toBe(true);
+  });
+
+  it("still does not emit lowercase two-letter function words", () => {
+    const out = tokenize("in of");
+    expect(out.has("in")).toBe(false);
+    expect(out.has("of")).toBe(false);
   });
 
   it("drops ascii stopwords", () => {
     const out = tokenize("the quick brown fox jumps over the lazy dog");
     expect(out.has("the")).toBe(false);
     expect(out.has("quick")).toBe(true);
+  });
+
+  it("gates the inflected surface forms of already-gated relational verbs", () => {
+    // 含む / 関する / に関する are gated as functional. The segmenter emits
+    // 含ん, 関し and に関し for their inflected forms, which leaked through and
+    // carried the IDF of a df-26 topical word. Gating them closes that leak;
+    // it is not a general rule about conjugation fragments.
+    expect(tokenize("税を含んだ価格", true).has("含ん")).toBe(false);
+    expect(tokenize("手数料を含んで計算", true).has("含ん")).toBe(false);
+    expect(tokenize("本件に関し検討する", true).has("関し")).toBe(false);
+    expect(tokenize("この件に関して報告する", true).has("に関し")).toBe(false);
+    // The surrounding content words must survive.
+    expect(tokenize("税を含んだ価格", true).has("価格")).toBe(true);
+    expect(tokenize("本件に関し検討する", true).has("検討")).toBe(true);
+  });
+
+  it("keeps fragments that still carry the source verb's topical sense", () => {
+    // 死ん / 置い / 見て / 変わら / 思わ are not independent words either, but
+    // "not a word" is not "no topical signal" — a vault about death, storage or
+    // observation can legitimately match on them. A stopword entry is global
+    // and unrecoverable, so they stay out.
+    expect(tokenize("猫が死んだ", true).has("死ん")).toBe(true);
+    expect(tokenize("棚に置いた", true).has("置い")).toBe(true);
+    expect(tokenize("映画を見て", true).has("見て")).toBe(true);
+  });
+
+  it("adds no source stopwords for the two-letter acronym path", () => {
+    // These read as date/time format placeholders, but each also has a real
+    // topical reading in some vault (SS: screenshot, DD: due diligence, OK: UI
+    // copy). A stopword entry is global and unrecoverable, while the df >= 2 /
+    // df <= 40% salience gates already suppress genuine format-string noise —
+    // so the acronym path ships without widening this file.
+    const out = tokenize("MM DD YY HH SS OK AA AB");
+    for (const kept of ["mm", "dd", "yy", "hh", "ss", "ok", "aa", "ab"]) {
+      expect(out.has(kept)).toBe(true);
+    }
   });
 
   it("extracts katakana of length >= 2", () => {
@@ -107,6 +205,12 @@ describe("tokenize", () => {
     const out = tokenize("リチウムバッテリー");
     expect(out.has("リチウム")).toBe(true);
     expect(out.has("バッテリ")).toBe(true);
+  });
+
+  it("counts each normalized katakana sub-word once per parent-run occurrence", () => {
+    const standalone = new Set(["サーバ"]);
+    expect(tokenize("クラウドサーバー", false, standalone).get("サーバ")).toBe(1);
+    expect(tokenize("クラウドサーバー クラウドサーバー", false, standalone).get("サーバ")).toBe(2);
   });
 
   it("harvests standalone-word units (kanji 2-grams, katakana words) via the 4th arg", () => {
@@ -223,6 +327,11 @@ describe("tokenize", () => {
     // biasing salience toward 2-char kanji words.
     expect(tokenize("関連").get("関連")).toBe(1);
     expect(tokenize("関連の話。また関連について。").get("関連")).toBe(2);
+  });
+
+  it("counts a repeated kanji bigram once per parent-run occurrence", () => {
+    expect(tokenize("代々木代々木").get("代々")).toBe(1);
+    expect(tokenize("代々木代々木 代々木代々木").get("代々")).toBe(2);
   });
 
   it("strips bare URLs without eating adjacent Japanese text", () => {
