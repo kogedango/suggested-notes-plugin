@@ -23,19 +23,12 @@ export class BodyTokenIndex {
   private inverted = new Map<string, Set<string>>();
   // Corpus: global doc-freq over full token sets (drives IDF).
   private df = new Map<string, number>();
-  // Baseline df excludes the additive hiragana repair lane, so existing
-  // salient sets and candidate pairs cannot be displaced by repair tokens.
-  private baselineDf = new Map<string, number>();
   // Corpus: standalone-word units seen on their own somewhere in the vault
   // (kanji 2-grams and whole katakana words), used to gate interior sub-units
   // of longer runs. Frozen per rebuild like df (a unit new to the vault is not
   // trusted as a word until the next coarse rebuild — the same staleness
   // trade-off df already accepts).
   private standalone = new Set<string>();
-  // Hiragana-only vocabulary candidates accepted by TinySegmenter somewhere
-  // in the corpus. Kept separate because their evidence differs from the
-  // script-run standalone units above. Frozen per rebuild like df.
-  private hiraganaDictionary = new Set<string>();
   private totalNotes = 0;
   private idfCache = new Map<string, number>();
   private built = false;
@@ -46,9 +39,7 @@ export class BodyTokenIndex {
     this.salient = new Map();
     this.inverted = new Map();
     this.df = new Map();
-    this.baselineDf = new Map();
     this.standalone = new Set();
-    this.hiraganaDictionary = new Set();
     this.idfCache.clear();
     this.totalNotes = 0;
     this.built = false;
@@ -95,31 +86,12 @@ export class BodyTokenIndex {
   ): Promise<Set<string>> {
     if (!this.built) return new Set();
     const body = await this.app.vault.cachedRead(file);
-    const repairs = new Map<string, number>();
-    const tokens = tokenize(
-      body,
-      segment,
-      this.standalone,
-      undefined,
-      this.hiraganaDictionary,
-      undefined,
-      repairs,
-    );
-    const result = rankSalient(
-      tokens,
+    return rankSalient(
+      tokenize(body, segment, this.standalone),
       topN,
-      this.baselineDf,
-      this.totalNotes,
-    );
-    addHiraganaRepairSalient(
-      result,
-      tokens,
-      repairs,
-      this.hiraganaDictionary,
       this.df,
       this.totalNotes,
     );
-    return result;
   }
 
   // --- Cheap corpus maintenance ---
@@ -137,25 +109,12 @@ export class BodyTokenIndex {
     segment: boolean,
   ): Promise<void> {
     if (!this.built) return;
-    const repairs = new Map<string, number>();
     const tokens = tokenize(
       await this.app.vault.cachedRead(file),
       segment,
       this.standalone,
-      undefined,
-      this.hiraganaDictionary,
-      undefined,
-      repairs,
     );
-    const next = rankSalient(tokens, topN, this.baselineDf, this.totalNotes);
-    addHiraganaRepairSalient(
-      next,
-      tokens,
-      repairs,
-      this.hiraganaDictionary,
-      this.df,
-      this.totalNotes,
-    );
+    const next = rankSalient(tokens, topN, this.df, this.totalNotes);
     this.remove(file.path);
     this.salient.set(file.path, next);
     for (const t of next) {
@@ -202,9 +161,7 @@ export class BodyTokenIndex {
   async rebuildAll(topN: number, segment: boolean): Promise<void> {
     const files = this.app.vault.getMarkdownFiles();
     const nextStandalone = new Set<string>();
-    const nextHiraganaDictionary = new Set<string>();
     const perFileTokens = new Map<string, Map<string, number>>();
-    const perFileHiraganaRepairs = new Map<string, Map<string, number>>();
 
     // Pass 1: one read AND one scan per note. Tokenize ungated (the standalone
     // set isn't complete yet, so interior sub-units can't be filtered here) and
@@ -220,18 +177,9 @@ export class BodyTokenIndex {
           // were empty. Errors are logged, not swallowed silently.
           try {
             const body = await this.app.vault.cachedRead(f);
-            const repairs = new Map<string, number>();
-            const tokens = tokenize(
-              body,
-              segment,
-              undefined,
-              nextStandalone,
-              undefined,
-              nextHiraganaDictionary,
-              repairs,
-            );
-            if (tokens.size !== 0) perFileTokens.set(f.path, tokens);
-            if (repairs.size !== 0) perFileHiraganaRepairs.set(f.path, repairs);
+            const tokens = tokenize(body, segment, undefined, nextStandalone);
+            if (tokens.size === 0) return; // skip empty notes: they only dilute IDF
+            perFileTokens.set(f.path, tokens);
           } catch (err) {
             console.error(
               `Suggested Notes: failed to read "${f.path}" during body-token rebuild, skipping it`,
@@ -251,38 +199,15 @@ export class BodyTokenIndex {
     // was harvested above), so only never-standalone interior sub-units drop.
     // df stays a presence count (0/1 per note) — TF (the per-note occurrence
     // counts tokenize() returns) only feeds salience ranking below, never df.
-    const nextBaselineDf = new Map<string, number>();
+    const nextDf = new Map<string, number>();
     for (const tokens of perFileTokens.values()) {
       for (const t of tokens.keys()) {
         if (isInteriorArtifact(t, nextStandalone)) {
           tokens.delete(t);
           continue;
         }
-        nextBaselineDf.set(t, (nextBaselineDf.get(t) ?? 0) + 1);
+        nextDf.set(t, (nextDf.get(t) ?? 0) + 1);
       }
-    }
-    for (const repairs of perFileHiraganaRepairs.values()) {
-      for (const t of [...repairs.keys()]) {
-        if (!nextHiraganaDictionary.has(t)) repairs.delete(t);
-      }
-    }
-    for (const [path, tokens] of perFileTokens) {
-      if (tokens.size === 0) perFileTokens.delete(path);
-    }
-    for (const [path, repairs] of perFileHiraganaRepairs) {
-      if (repairs.size === 0) perFileHiraganaRepairs.delete(path);
-    }
-
-    // Scoring df is presence over the union of baseline and repair tokens.
-    // Baseline ranking continues to use nextBaselineDf, keeping its salient
-    // set byte-for-byte independent from the additive repair lane.
-    const nextDf = new Map<string, number>();
-    for (const path of perFileTokens.keys()) {
-      const present = new Set(perFileTokens.get(path)?.keys());
-      for (const t of perFileHiraganaRepairs.get(path)?.keys() ?? []) {
-        present.add(t);
-      }
-      for (const t of present) nextDf.set(t, (nextDf.get(t) ?? 0) + 1);
     }
 
     // Derive the whole new corpus into locals first. The live corpus keeps
@@ -293,24 +218,9 @@ export class BodyTokenIndex {
     const nextInverted = new Map<string, Set<string>>();
     let processed = 0;
     for (const [path, tokens] of perFileTokens) {
-      // Preserve baseline ranking against baseline statistics; then add a
-      // small independent hiragana concept lane.
-      const baselineSalient = rankSalient(
-        tokens,
-        topN,
-        nextBaselineDf,
-        totalNotes,
-      );
-      addHiraganaRepairSalient(
-        baselineSalient,
-        tokens,
-        perFileHiraganaRepairs.get(path) ?? EMPTY_MAP,
-        nextHiraganaDictionary,
-        nextDf,
-        totalNotes,
-      );
-      nextSalient.set(path, baselineSalient);
-      for (const t of baselineSalient) {
+      const salient = rankSalient(tokens, topN, nextDf, totalNotes);
+      nextSalient.set(path, salient);
+      for (const t of salient) {
         let inv = nextInverted.get(t);
         if (!inv) {
           inv = new Set();
@@ -322,9 +232,7 @@ export class BodyTokenIndex {
     }
 
     this.df = nextDf;
-    this.baselineDf = nextBaselineDf;
     this.standalone = nextStandalone;
-    this.hiraganaDictionary = nextHiraganaDictionary;
     this.totalNotes = totalNotes;
     this.salient = nextSalient;
     this.inverted = nextInverted;
@@ -344,51 +252,6 @@ function isInteriorArtifact(token: string, standalone: Set<string>): boolean {
   if (/^[一-龥々]{2}$/.test(token)) return !standalone.has(token);
   if (/^[ァ-ヶー]+$/.test(token)) return !standalone.has(token);
   return false;
-}
-
-function isHiraganaToken(token: string): boolean {
-  return /^[ぁ-んー]+$/.test(token);
-}
-
-const HIRAGANA_REPAIR_TOP_N = 20;
-const HIRAGANA_REPAIR_DF_MAX = 10;
-
-// Additive concept lane: a repaired occurrence in one note must be able to
-// match a normal segmenter occurrence in another. Build that lane from both
-// sources, rank it independently, then union it into the immutable baseline
-// salient set. This can add candidate pairs but cannot remove baseline pairs.
-function addHiraganaRepairSalient(
-  into: Set<string>,
-  baselineTokens: Map<string, number>,
-  repairTokens: Map<string, number>,
-  dictionary: Set<string>,
-  combinedDf: Map<string, number>,
-  totalNotes: number,
-): void {
-  const concepts = new Map<string, number>();
-  for (const [t, tf] of baselineTokens) {
-    if (
-      isHiraganaToken(t) &&
-      dictionary.has(t) &&
-      (combinedDf.get(t) ?? 0) <= HIRAGANA_REPAIR_DF_MAX
-    ) {
-      concepts.set(t, tf);
-    }
-  }
-  for (const [t, tf] of repairTokens) {
-    if ((combinedDf.get(t) ?? 0) <= HIRAGANA_REPAIR_DF_MAX) {
-      concepts.set(t, (concepts.get(t) ?? 0) + tf);
-    }
-  }
-  const repairSalient = rankSalient(
-    concepts,
-    HIRAGANA_REPAIR_TOP_N,
-    combinedDf,
-    totalNotes,
-    0,
-    0,
-  );
-  for (const t of repairSalient) into.add(t);
 }
 
 // Low-df reserve: after the top-N cut, a small extra allowance for the note's
@@ -446,7 +309,6 @@ export function rankSalient(
 }
 
 const EMPTY: Set<string> = new Set();
-const EMPTY_MAP: Map<string, number> = new Map();
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));

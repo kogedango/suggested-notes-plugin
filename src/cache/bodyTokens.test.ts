@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BodyTokenIndex, rankSalient } from "./bodyTokens";
+import { rankSalient } from "./bodyTokens";
 
 // rankSalient is the pure ranking step shared by rebuildAll, refreshNote, and
 // computeSalient: given a note's token -> in-body occurrence count map plus
@@ -147,47 +147,3 @@ describe("rankSalient", () => {
   });
 });
 
-describe("BodyTokenIndex hiragana repair lane", () => {
-  function fakeApp(bodies: Record<string, string>) {
-    const files = Object.keys(bodies).map((path) => ({ path }));
-    return {
-      vault: {
-        getMarkdownFiles: () => files,
-        cachedRead: async (file: { path: string }) => bodies[file.path],
-      },
-    } as never;
-  }
-
-  // TinySegmenter splits みかん correctly on its own but glues it to the
-  // preceding hiragana in "…ていたみかんを", yielding たみかん — so note B
-  // produces no shared token until the repair lane recovers it from the
-  // frozen vocabulary note A contributed.
-  it("freezes segmenter vocabulary and repairs a contextual miss", async () => {
-    const a = "a.md";
-    const b = "b.md";
-    const index = new BodyTokenIndex(fakeApp({
-      [a]: "みかんをたべた",
-      [b]: "ひえていたみかんをたべた",
-    }));
-
-    await index.rebuildAll(40, true);
-
-    expect(index.salientFor(a).has("みかん")).toBe(true);
-    expect(index.salientFor(b).has("みかん")).toBe(true);
-    expect(index.filesWithToken("みかん")).toEqual(new Set([a, b]));
-    expect(index.notesWithTokenCount("みかん")).toBe(2);
-  });
-
-  it("keeps the repair lane disabled when segmentation is disabled", async () => {
-    const a = "a.md";
-    const b = "b.md";
-    const index = new BodyTokenIndex(fakeApp({
-      [a]: "みかん",
-      [b]: "なっていたみかんを取った",
-    }));
-
-    await index.rebuildAll(40, false);
-
-    expect(index.filesWithToken("みかん").size).toBe(0);
-  });
-});

@@ -6,40 +6,21 @@ import {
 } from "./tokenize";
 
 describe("tokenize", () => {
-  it("keeps the options API equivalent to every legacy input and collector", () => {
-    const text = "---\ntitle: hidden\n---\n機械学習 リチウムバッテリー なっていたみかんを Obsidian";
+  it("keeps the options API equivalent to the legacy positional inputs", () => {
+    const text = "---\ntitle: hidden\n---\n機械学習 リチウムバッテリー Obsidian";
     const standalone = new Set(["機械", "学習", "バッテリ"]);
-    const hiraganaDictionary = new Set(["みかん"]);
     const legacyStandalone = new Set<string>();
     const optionsStandalone = new Set<string>();
-    const legacyHiragana = new Set<string>();
-    const optionsHiragana = new Set<string>();
-    const legacyRepairs = new Map<string, number>();
-    const optionsRepairs = new Map<string, number>();
 
-    const legacy = tokenize(
-      text,
-      true,
-      standalone,
-      legacyStandalone,
-      hiraganaDictionary,
-      legacyHiragana,
-      legacyRepairs,
-    );
+    const legacy = tokenize(text, true, standalone, legacyStandalone);
     const options = tokenizeWithOptions(text, {
       segment: true,
-      corpus: { standalone, hiraganaDictionary },
-      collectors: {
-        standalone: optionsStandalone,
-        hiraganaVocabulary: optionsHiragana,
-        hiraganaRepairs: optionsRepairs,
-      },
+      corpus: { standalone },
+      collectors: { standalone: optionsStandalone },
     });
 
     expect(options).toEqual(legacy);
     expect(optionsStandalone).toEqual(legacyStandalone);
-    expect(optionsHiragana).toEqual(legacyHiragana);
-    expect(optionsRepairs).toEqual(legacyRepairs);
   });
 
   it("exposes the same preprocessing boundary used by every token lane", () => {
@@ -64,32 +45,6 @@ describe("tokenize", () => {
     expect(gated.has("日本語")).toBe(true);
     expect(gated.has("日本")).toBe(false);
     expect(gated.has("本語")).toBe(false);
-  });
-
-  it("routes hiragana repairs exclusively to their collector when provided", () => {
-    const repairs = new Map<string, number>();
-    const out = tokenizeWithOptions("なっていたみかんを取った", {
-      segment: true,
-      corpus: { hiraganaDictionary: new Set(["みかん"]) },
-      collectors: { hiraganaRepairs: repairs },
-    });
-
-    expect(out.has("みかん")).toBe(false);
-    expect(repairs.get("みかん")).toBe(1);
-  });
-
-  it("does not run segmenter collectors when segmentation is disabled", () => {
-    const hiraganaVocabulary = new Set<string>();
-    const hiraganaRepairs = new Map<string, number>();
-    const out = tokenizeWithOptions("なっていたみかんを取った", {
-      segment: false,
-      corpus: { hiraganaDictionary: new Set(["みかん"]) },
-      collectors: { hiraganaVocabulary, hiraganaRepairs },
-    });
-
-    expect(out.has("みかん")).toBe(false);
-    expect(hiraganaVocabulary.size).toBe(0);
-    expect(hiraganaRepairs.size).toBe(0);
   });
 
   it("extracts ascii words, lowercased", () => {
@@ -277,87 +232,6 @@ describe("tokenize", () => {
     const plain = tokenize(text);
     expect(plain.has("打ち合わせ")).toBe(false);
     expect(plain.has("ふりかえり")).toBe(false);
-  });
-
-  it("harvests hiragana vocabulary candidates from accepted segmenter output", () => {
-    const hira = new Set<string>();
-    tokenize("みかん\nひらめき", true, undefined, undefined, undefined, hira);
-    expect(hira.has("みかん")).toBe(true);
-    expect(hira.has("ひらめき")).toBe(true);
-  });
-
-  it("repairs a context-dependent hiragana miss from the frozen dictionary", () => {
-    const dictionary = new Set(["みかん"]);
-    const out = tokenize(
-      "なっていたみかんを取った",
-      true,
-      undefined,
-      undefined,
-      dictionary,
-    );
-    expect(out.has("みかん")).toBe(true);
-    // TinySegmenter's original context-dependent output remains visible; the
-    // repair lane adds the stable vocabulary candidate alongside it.
-    expect(out.has("たみかん")).toBe(true);
-  });
-
-  it("does not emit a maximal hiragana run from the repair lane", () => {
-    const phrase = "なっていたみかんを";
-    const out = tokenize(
-      phrase,
-      true,
-      undefined,
-      undefined,
-      new Set([phrase]),
-    );
-    expect(out.has(phrase)).toBe(false);
-  });
-
-  it("bounds hiragana repair words at eight characters", () => {
-    const run = "あいうえおかきくけこ";
-    const length8 = run.slice(1, 9);
-    const length9 = run.slice(1, 10);
-    const out = tokenize(
-      run,
-      true,
-      undefined,
-      undefined,
-      new Set([length8, length9]),
-    );
-    expect(out.has(length8)).toBe(true);
-    expect(out.has(length9)).toBe(false);
-  });
-
-  it("deduplicates segmenter and repair output by span while preserving TF across spans", () => {
-    const dictionary = new Set(["みかん"]);
-    const once = tokenize(
-      "みかん",
-      true,
-      undefined,
-      undefined,
-      dictionary,
-    );
-    expect(once.get("みかん")).toBe(1);
-
-    const twice = tokenize(
-      "みかん。なっていたみかんを取った",
-      true,
-      undefined,
-      undefined,
-      dictionary,
-    );
-    expect(twice.get("みかん")).toBe(2);
-  });
-
-  it("keeps the hiragana repair lane disabled with the segmenter off", () => {
-    const out = tokenize(
-      "なっていたみかんを取った",
-      false,
-      undefined,
-      undefined,
-      new Set(["みかん"]),
-    );
-    expect(out.has("みかん")).toBe(false);
   });
 
   it("segmenter mode drops hiragana function words", () => {

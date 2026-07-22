@@ -82,17 +82,6 @@ An opt-in enrichment that surfaces notes sharing rare vocabulary even without sh
 
 **Segmentation**: Japanese segmentation via `tiny-segmenter` (`bodyTokenSegmenterEnabled`, ON by default — promoted 2026-07 after CPU benchmark; see plan F). The corpus and the query must always be tokenized with the same segmenter flag; toggling the setting triggers a corpus rebuild.
 
-When segmentation is enabled, a bounded **hiragana repair lane** patches
-context-dependent misses such as `なっていたみかんを` → `たみかん`. Corpus
-pass 1 freezes accepted hiragana-only segmenter outputs (length 3+) in a
-separate dictionary and provisionally scans maximal hiragana runs for bounded
-3..8-character matches; pass 2 drops candidates absent from that dictionary.
-Query/refresh gate inline against the frozen dictionary. The repair lane emits
-no full hiragana run and deduplicates segmenter/repair output by source span.
-It is ranked as an independent additive lane (top 20, df ≤ 10), so baseline
-salient sets and candidate pairs cannot be displaced. Segmenter-off behavior is
-unchanged. See `docs/body-recall-hiragana-decision-2026-07-22.md`.
-
 **Corpus/query split** — this is what keeps full-text within the constraints, so preserve it:
 
 - **Corpus** (all notes: `df`, per-note `salient`, inverted index) is rebuilt *coarsely* — on enable, on startup, on demand (the settings-tab rebuild button / `Rebuild body-token index` command), and via a **lazy** debounced backstop (~60s after edits settle; manual refresh is the "I need it now" path, so keep the auto rebuild infrequent).
