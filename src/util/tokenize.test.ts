@@ -189,6 +189,87 @@ describe("tokenize", () => {
     expect(plain.has("ふりかえり")).toBe(false);
   });
 
+  it("harvests hiragana vocabulary candidates from accepted segmenter output", () => {
+    const hira = new Set<string>();
+    tokenize("みかん\nひらめき", true, undefined, undefined, undefined, hira);
+    expect(hira.has("みかん")).toBe(true);
+    expect(hira.has("ひらめき")).toBe(true);
+  });
+
+  it("repairs a context-dependent hiragana miss from the frozen dictionary", () => {
+    const dictionary = new Set(["みかん"]);
+    const out = tokenize(
+      "なっていたみかんを取った",
+      true,
+      undefined,
+      undefined,
+      dictionary,
+    );
+    expect(out.has("みかん")).toBe(true);
+    // TinySegmenter's original context-dependent output remains visible; the
+    // repair lane adds the stable vocabulary candidate alongside it.
+    expect(out.has("たみかん")).toBe(true);
+  });
+
+  it("does not emit a maximal hiragana run from the repair lane", () => {
+    const phrase = "なっていたみかんを";
+    const out = tokenize(
+      phrase,
+      true,
+      undefined,
+      undefined,
+      new Set([phrase]),
+    );
+    expect(out.has(phrase)).toBe(false);
+  });
+
+  it("bounds hiragana repair words at eight characters", () => {
+    const run = "あいうえおかきくけこ";
+    const length8 = run.slice(1, 9);
+    const length9 = run.slice(1, 10);
+    const out = tokenize(
+      run,
+      true,
+      undefined,
+      undefined,
+      new Set([length8, length9]),
+    );
+    expect(out.has(length8)).toBe(true);
+    expect(out.has(length9)).toBe(false);
+  });
+
+  it("deduplicates segmenter and repair output by span while preserving TF across spans", () => {
+    const dictionary = new Set(["みかん"]);
+    const once = tokenize(
+      "みかん",
+      true,
+      undefined,
+      undefined,
+      dictionary,
+    );
+    expect(once.get("みかん")).toBe(1);
+
+    const twice = tokenize(
+      "みかん。なっていたみかんを取った",
+      true,
+      undefined,
+      undefined,
+      dictionary,
+    );
+    expect(twice.get("みかん")).toBe(2);
+  });
+
+  it("keeps the hiragana repair lane disabled with the segmenter off", () => {
+    const out = tokenize(
+      "なっていたみかんを取った",
+      false,
+      undefined,
+      undefined,
+      new Set(["みかん"]),
+    );
+    expect(out.has("みかん")).toBe(false);
+  });
+
   it("segmenter mode drops hiragana function words", () => {
     const seg = tokenize("日記にひらめきを書く。サーバーの監視について", true);
     expect(seg.has("ひらめき")).toBe(true);

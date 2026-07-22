@@ -24,6 +24,9 @@ const TOKEN_RE = /[A-Za-z][A-Za-z0-9_\-]{2,}|(?<![A-Za-z0-9_\-])[A-Z]{2}(?![A-Za
 // コンパス→パス, リバース→バー) and the real 2-char words are already captured when
 // they stand alone (the full run is always emitted regardless of this gate).
 const KATAKANA_SUBWORD_MIN = 3;
+const HIRAGANA_SUBWORD_MIN = 3;
+export const HIRAGANA_SUBWORD_MAX = 8;
+const HIRAGANA_RUN_RE = /[ぁ-んー]{3,}/gu;
 
 // NFKC folds full-width ASCII, half-width katakana, and decomposed kana into
 // their canonical forms so "Ｏbsidian"/"ﾉｰﾄ" tokenize the same as the plain
@@ -70,6 +73,15 @@ function strip(body: string): string {
 // what used to be a separate corpus pass into tokenize's single matchAll, so a
 // rebuild reads and scans each note once. Frozen per rebuild, exactly like df.
 //
+// `hiraganaDictionary` / `collectHiraganaInto` form a separate, segmenter-only
+// repair lane. During corpus pass 1, accepted hiragana-only segmenter outputs
+// are collected as vocabulary candidates while bounded (3..8) substrings of
+// maximal hiragana runs are emitted provisionally. Pass 2 drops provisional
+// strings absent from the frozen dictionary. Query/refresh calls receive that
+// dictionary and gate inline. The full hiragana run is never emitted by this
+// lane: it is usually a phrase, while a genuine whole word is already emitted
+// by addSegmented(). The lane is disabled when `segment` is false.
+//
 // Returns a token -> in-body occurrence count map (not a Set): salience
 // ranking weights by log(1+TF) so a note's genuinely recurring vocabulary
 // beats a rare word mentioned once (design-review-2026-07-02 #5). A derived
@@ -82,6 +94,9 @@ export function tokenize(
   segment = false,
   standalone?: Set<string>,
   collectStandaloneInto?: Set<string>,
+  hiraganaDictionary?: Set<string>,
+  collectHiraganaInto?: Set<string>,
+  collectHiraganaRepairsInto?: Map<string, number>,
 ): Map<string, number> {
   const stripped = strip(body);
 
@@ -98,7 +113,24 @@ export function tokenize(
       addKanjiRun(out, tok, standalone, collectStandaloneInto);
     }
   }
-  if (segment) addSegmented(out, stripped);
+  if (segment) {
+    const segmentedHiraganaSpans = addSegmented(
+      out,
+      stripped,
+      collectHiraganaInto,
+    );
+    // Plain segmenter calls preserve their historical behavior. Provisional
+    // over-generation is corpus-pass-1-only (signalled by a collector), while
+    // query/refresh repair is enabled by a frozen dictionary.
+    if (hiraganaDictionary || collectHiraganaInto) {
+      addHiraganaRepairs(
+        collectHiraganaRepairsInto ?? out,
+        stripped,
+        hiraganaDictionary,
+        segmentedHiraganaSpans,
+      );
+    }
+  }
   return out;
 }
 
@@ -199,12 +231,64 @@ function addKanjiRun(
 
 let segmenter: TinySegmenter | null = null;
 
+function spanKey(start: number, end: number, token: string): string {
+  return `${start}:${end}:${token}`;
+}
+
+// Repair context-dependent TinySegmenter misses without copying the katakana
+// path's unbounded O(n^2) substring generation. Each start position produces
+// at most six candidates (length 3..8), so work is linear in run length. A
+// candidate already emitted by addSegmented at the exact same source span is
+// skipped; another occurrence at a different span still contributes TF.
+function addHiraganaRepairs(
+  out: Map<string, number>,
+  stripped: string,
+  dictionary: Set<string> | undefined,
+  segmentedSpans: Set<string>,
+): void {
+  for (const match of stripped.matchAll(HIRAGANA_RUN_RE)) {
+    const run = match[0];
+    const runStart = match.index;
+    const derived = new Set<string>();
+    for (let i = 0; i < run.length; i++) {
+      const maxLength = Math.min(HIRAGANA_SUBWORD_MAX, run.length - i);
+      for (let length = HIRAGANA_SUBWORD_MIN; length <= maxLength; length++) {
+        // The repair lane never emits the maximal run itself. Whole-word
+        // hiragana tokens are addSegmented's responsibility.
+        if (i === 0 && length === run.length) continue;
+        const sub = run.slice(i, i + length);
+        if (JA_STOPWORDS.has(sub)) continue;
+        if (dictionary && !dictionary.has(sub)) continue;
+        const start = runStart + i;
+        const end = start + length;
+        if (segmentedSpans.has(spanKey(start, end, sub))) continue;
+        // Count a token at most once per parent-run occurrence. Different
+        // spans in the same run are still distinct TF occurrences, so include
+        // the span in the temporary key.
+        derived.add(spanKey(start, end, sub));
+      }
+    }
+    for (const key of derived) {
+      const token = key.slice(key.lastIndexOf(":") + 1);
+      bump(out, token);
+    }
+  }
+}
+
 // Only the gap the regex pass cannot see is taken from the segmenter output:
 // kanji+hiragana mixed words and hiragana-only words. ASCII / katakana /
 // kanji-run segments are already covered (with their own normalization) above.
-function addSegmented(out: Map<string, number>, stripped: string): void {
+function addSegmented(
+  out: Map<string, number>,
+  stripped: string,
+  collectHiraganaInto?: Set<string>,
+): Set<string> {
   if (!segmenter) segmenter = new TinySegmenter();
+  const hiraganaSpans = new Set<string>();
+  let offset = 0;
   for (const seg of segmenter.segment(stripped)) {
+    const start = offset;
+    offset += seg.length;
     const hasKanji = /[一-龥々]/.test(seg);
     const hasHira = /[ぁ-ん]/.test(seg);
     // A token ending in the sokuon っ is always a clipped conjugation (使っ →
@@ -220,7 +304,12 @@ function addSegmented(out: Map<string, number>, stripped: string): void {
     } else if (hasHira && !hasKanji && /^[ぁ-んー]+$/.test(seg)) {
       // Hiragana-only words need a higher bar: most short ones are function
       // words, so require length >= 3 and not a known filler.
-      if (seg.length >= 3 && !JA_STOPWORDS.has(seg)) bump(out, seg);
+      if (seg.length >= 3 && !JA_STOPWORDS.has(seg)) {
+        bump(out, seg);
+        collectHiraganaInto?.add(seg);
+        hiraganaSpans.add(spanKey(start, offset, seg));
+      }
     }
   }
+  return hiraganaSpans;
 }
