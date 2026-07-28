@@ -1,6 +1,7 @@
-# Mobile testing for v0.6.0
+# Mobile testing for v0.6.1
 
-Status: **basic use verified on an iPhone 13; full release checklist pending**.
+Status: **v0.6.0 basic use verified on an iPhone 13; v0.6.1 UI checks and the
+full release checklist pending**.
 
 `manifest.json` declares `isDesktopOnly: false`, and the implementation avoids
 desktop-only APIs. This document is the release gate for claiming mobile
@@ -8,7 +9,7 @@ support in user-facing documentation.
 
 ## Build under test
 
-- Version: `0.6.0`
+- Version: `0.6.1`
 - Distribution: GitHub prerelease installed through BRAT
 - Bundle: approximately 27.5 MB, primarily the embedded IPADIC dictionary
 - Network access at runtime: none
@@ -19,7 +20,7 @@ Record the tested commit and exact bundle size for each test round.
 
 | Platform | OS version | Device | Obsidian version | Vault size | Result |
 |---|---|---|---|---:|---|
-| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use passed; full checklist pending |
+| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | v0.6.0 basic use passed; v0.6.1 pending |
 | Android | — | — | — | — | Pending |
 
 Only platforms required for the release need a passing result. Untested
@@ -30,7 +31,7 @@ platforms must remain explicitly labeled as unverified.
 1. Back up the Vault or use a representative test Vault.
 2. Install and enable BRAT from Community plugins.
 3. Add `kogedango/suggested-notes-plugin` as a beta plugin.
-4. Select the `0.6.0` prerelease and enable Suggested Notes.
+4. Select the `0.6.1` prerelease and enable Suggested Notes.
 5. Fully quit and restart Obsidian before cold-start measurements.
 
 ## Required checks
