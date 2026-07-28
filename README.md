@@ -121,7 +121,7 @@ Set the weight to 0 to disable active-body mention scanning.
 
 - Sidebar listing related notes for the active file
 - Hover a row or tap its score for the score breakdown; Cmd/Ctrl-hover for the note preview
-- Copy links from the row's hover button on desktop or its long-press menu on mobile; copying never modifies a note
+- Copy links from the row's hover button on desktop or by long-pressing the row on mobile; copying never modifies a note
 - Suggested tags — tags frequent in the result set but missing from the active note; click to add to frontmatter
 - Exclusions: folders / tags / outlinks / content words ([semantics](#exclusion-semantics))
 

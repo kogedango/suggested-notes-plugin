@@ -1,6 +1,5 @@
 import {
   ItemView,
-  Menu,
   Notice,
   Platform,
   TFile,
@@ -354,7 +353,7 @@ export class RelatedNotesView extends ItemView {
     targetPath: string,
   ): void {
     if (Platform.isMobileApp) {
-      this.attachMobileCopyMenu(self, activePath, targetPath);
+      this.attachMobileLongPressCopy(self, activePath, targetPath);
       return;
     }
     const copyBtn = self.createEl("div", {
@@ -365,7 +364,9 @@ export class RelatedNotesView extends ItemView {
     let copiedTimer: number | undefined;
     copyBtn.addEventListener("click", async (event) => {
       event.stopPropagation();
-      await this.plugin.copyLinkToClipboard(activePath, targetPath);
+      if (!(await this.plugin.copyLinkToClipboard(activePath, targetPath))) {
+        return;
+      }
       window.clearTimeout(copiedTimer);
       copyBtn.empty();
       setIcon(copyBtn, "check");
@@ -378,7 +379,16 @@ export class RelatedNotesView extends ItemView {
     });
   }
 
-  private attachMobileCopyMenu(
+  // Mobile has no room for a permanent copy target, so copying rides on a long
+  // press of the row: hold to arm, release to copy.
+  //
+  // The clipboard write must stay in the touchend handler. WebKit only allows
+  // navigator.clipboard from a handler that carries transient user activation,
+  // and a setTimeout callback does not — writing at the moment the threshold
+  // fires would reject on iOS. So the timer only arms the gesture and paints
+  // the row, which doubles as the "let go now" cue. iOS gives web content no
+  // haptics, so that highlight is the only in-place signal available.
+  private attachMobileLongPressCopy(
     self: HTMLElement,
     activePath: string,
     targetPath: string,
@@ -386,16 +396,24 @@ export class RelatedNotesView extends ItemView {
     let timer: number | undefined;
     let startX = 0;
     let startY = 0;
-    let suppressClickUntil = 0;
+    let armed = false;
+    let swallowNextClick = false;
 
-    const cancel = () => {
+    const disarm = () => {
       window.clearTimeout(timer);
       timer = undefined;
+      armed = false;
+      self.removeClass("is-copy-armed");
     };
 
     self.addEventListener(
       "touchstart",
       (event) => {
+        // Reset ahead of every early return: a gesture that armed but produced
+        // no click (a drag, say) would otherwise leave the flag set and eat an
+        // unrelated later tap on this row.
+        swallowNextClick = false;
+        disarm();
         if (event.touches.length !== 1) return;
         const target = event.target;
         if (
@@ -407,22 +425,11 @@ export class RelatedNotesView extends ItemView {
         const touch = event.touches[0];
         startX = touch.clientX;
         startY = touch.clientY;
-        cancel();
         timer = window.setTimeout(() => {
           timer = undefined;
-          suppressClickUntil = Date.now() + 1_000;
+          armed = true;
+          self.addClass("is-copy-armed");
           this.hideReasonsTip();
-          new Menu()
-            .addItem((item) =>
-              item
-                .setTitle(t("ariaCopyLink"))
-                .setIcon("copy")
-                .onClick(async () => {
-                  await this.plugin.copyLinkToClipboard(activePath, targetPath);
-                  new Notice(t("noticeLinkCopied"));
-                }),
-            )
-            .showAtPosition({ x: startX, y: startY });
         }, MOBILE_LONG_PRESS_MS);
       },
       { passive: true },
@@ -436,22 +443,55 @@ export class RelatedNotesView extends ItemView {
           Math.hypot(touch.clientX - startX, touch.clientY - startY) >
             MOBILE_LONG_PRESS_MOVE_TOLERANCE_PX
         ) {
-          cancel();
+          disarm();
         }
       },
       { passive: true },
     );
-    self.addEventListener("touchend", cancel, { passive: true });
-    self.addEventListener("touchcancel", cancel, { passive: true });
+    self.addEventListener(
+      "touchend",
+      () => {
+        if (!armed) {
+          disarm();
+          return;
+        }
+        disarm();
+        // Releasing synthesizes a click that would open the note on top of the
+        // copy. Swallow exactly that one click.
+        swallowNextClick = true;
+        void this.copyLinkFromRow(activePath, targetPath);
+      },
+      { passive: true },
+    );
+    self.addEventListener("touchcancel", disarm, { passive: true });
     self.addEventListener(
       "click",
       (event) => {
-        if (Date.now() >= suppressClickUntil) return;
+        if (!swallowNextClick) return;
+        swallowNextClick = false;
         event.preventDefault();
         event.stopImmediatePropagation();
       },
       true,
     );
+  }
+
+  private async copyLinkFromRow(
+    activePath: string,
+    targetPath: string,
+  ): Promise<void> {
+    // A rejected clipboard write must not be silent: with no button on screen,
+    // a long press that quietly does nothing is indistinguishable from the
+    // feature being gone.
+    try {
+      if (!(await this.plugin.copyLinkToClipboard(activePath, targetPath))) {
+        return;
+      }
+      new Notice(t("noticeLinkCopied"));
+    } catch (error) {
+      console.error("Suggested Notes: copying the link failed", error);
+      new Notice(t("noticeLinkCopyFailed"));
+    }
   }
 
   private renderTags(

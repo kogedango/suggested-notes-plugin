@@ -61,7 +61,12 @@ platforms must remain explicitly labeled as unverified.
 - Vault-specific vocabulary and aliases work.
 - Unlinked title mentions work without counting existing links.
 - A row tap opens the note, a score tap toggles its details, and a row long
-  press opens the copy-link menu without firing the row tap.
+  press copies the link without also opening the note.
+- The long-pressed link pastes correctly into a note. WebKit refuses clipboard
+  writes without user activation, so a silent no-op here means the write is
+  running outside the touch handler.
+- A row tap immediately after a long press opens the note as usual.
+- Dragging away before releasing cancels the copy and leaves no highlight.
 - Tag-add and settings controls remain usable.
 
 ### Resource observations

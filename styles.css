@@ -150,6 +150,18 @@
   color: var(--text-success, var(--interactive-accent));
 }
 
+/* Mobile long-press copy: held past the threshold, the row lights up to say
+   the copy is armed. The finger is still on the row at that moment, so this
+   has to read from under the thumb; the notice only lands on release. */
+.suggested-notes-self.is-copy-armed {
+  /* Themes put --background-modifier-active-hover around 12% grey, which is
+     too faint to notice on a phone with a thumb over the row, so tint with the
+     accent. The plain value is the fallback where color-mix is unavailable. */
+  background-color: var(--background-modifier-active-hover, var(--background-modifier-hover));
+  background-color: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+  box-shadow: inset 3px 0 0 0 var(--interactive-accent);
+}
+
 .suggested-notes-tags-section {
   padding: var(--size-4-2) var(--size-4-3) var(--size-4-3);
   border-bottom: 1px solid var(--background-modifier-border);

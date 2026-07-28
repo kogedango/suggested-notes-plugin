@@ -731,13 +731,14 @@ export default class RelatedNotesPlugin extends Plugin {
   async copyLinkToClipboard(
     activePath: string,
     targetPath: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
-    if (!(targetFile instanceof TFile)) return;
+    if (!(targetFile instanceof TFile)) return false;
     const link = this.app.fileManager.generateMarkdownLink(
       targetFile,
       activePath,
     );
     await navigator.clipboard.writeText(link);
+    return true;
   }
 }
