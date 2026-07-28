@@ -121,6 +121,7 @@ const en = {
   noticeBodyTokenRebuildFailed: "Body-token index rebuild failed: {message}",
   noticeMorphologyFailed: "Language analyzers failed to initialize: {message}",
   noticeActiveNoteChanged: "Active note has changed.",
+  noticeLinkCopied: "Link copied.",
   // Deliberately left out of `ja` below: the format is just "+#tag" with no
   // English words in it, so the English-fallback template already reads
   // correctly in a Japanese vault.
@@ -245,6 +246,7 @@ const ja: Partial<Record<keyof typeof en, string>> = {
     "本文トークンインデックスの再構築に失敗しました: {message}",
   noticeMorphologyFailed: "言語解析器の初期化に失敗しました: {message}",
   noticeActiveNoteChanged: "アクティブなノートが変わりました。",
+  noticeLinkCopied: "リンクをコピーしました。",
 };
 
 export type TranslationKey = keyof typeof en;

@@ -150,17 +150,6 @@
   color: var(--text-success, var(--interactive-accent));
 }
 
-.suggested-notes-self.has-mobile-copy {
-  padding-inline-end: calc(var(--size-4-2) + 30px);
-}
-
-.suggested-notes-self.has-mobile-copy .suggested-notes-copy {
-  position: absolute;
-  inset-inline-end: var(--size-4-1);
-  opacity: 1;
-  pointer-events: auto;
-}
-
 .suggested-notes-tags-section {
   padding: var(--size-4-2) var(--size-4-3) var(--size-4-3);
   border-bottom: 1px solid var(--background-modifier-border);

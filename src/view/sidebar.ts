@@ -1,5 +1,7 @@
 import {
   ItemView,
+  Menu,
+  Notice,
   Platform,
   TFile,
   WorkspaceLeaf,
@@ -13,6 +15,8 @@ import { displayName } from "../util/path";
 export const VIEW_TYPE_RELATED_NOTES = "suggested-notes-view";
 
 const REASONS_TIP_DELAY_MS = 350;
+const MOBILE_LONG_PRESS_MS = 500;
+const MOBILE_LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 
 export class RelatedNotesView extends ItemView {
   private reasonsTipEl: HTMLElement | null = null;
@@ -349,7 +353,10 @@ export class RelatedNotesView extends ItemView {
     activePath: string,
     targetPath: string,
   ): void {
-    if (Platform.isMobileApp) self.addClass("has-mobile-copy");
+    if (Platform.isMobileApp) {
+      this.attachMobileCopyMenu(self, activePath, targetPath);
+      return;
+    }
     const copyBtn = self.createEl("div", {
       cls: "clickable-icon suggested-notes-copy",
       attr: { "aria-label": t("ariaCopyLink") },
@@ -369,6 +376,82 @@ export class RelatedNotesView extends ItemView {
         copyBtn.removeClass("is-copied");
       }, 1200);
     });
+  }
+
+  private attachMobileCopyMenu(
+    self: HTMLElement,
+    activePath: string,
+    targetPath: string,
+  ): void {
+    let timer: number | undefined;
+    let startX = 0;
+    let startY = 0;
+    let suppressClickUntil = 0;
+
+    const cancel = () => {
+      window.clearTimeout(timer);
+      timer = undefined;
+    };
+
+    self.addEventListener(
+      "touchstart",
+      (event) => {
+        if (event.touches.length !== 1) return;
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest(".suggested-notes-score")
+        ) {
+          return;
+        }
+        const touch = event.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+        cancel();
+        timer = window.setTimeout(() => {
+          timer = undefined;
+          suppressClickUntil = Date.now() + 1_000;
+          this.hideReasonsTip();
+          new Menu()
+            .addItem((item) =>
+              item
+                .setTitle(t("ariaCopyLink"))
+                .setIcon("copy")
+                .onClick(async () => {
+                  await this.plugin.copyLinkToClipboard(activePath, targetPath);
+                  new Notice(t("noticeLinkCopied"));
+                }),
+            )
+            .showAtPosition({ x: startX, y: startY });
+        }, MOBILE_LONG_PRESS_MS);
+      },
+      { passive: true },
+    );
+    self.addEventListener(
+      "touchmove",
+      (event) => {
+        const touch = event.touches[0];
+        if (
+          !touch ||
+          Math.hypot(touch.clientX - startX, touch.clientY - startY) >
+            MOBILE_LONG_PRESS_MOVE_TOLERANCE_PX
+        ) {
+          cancel();
+        }
+      },
+      { passive: true },
+    );
+    self.addEventListener("touchend", cancel, { passive: true });
+    self.addEventListener("touchcancel", cancel, { passive: true });
+    self.addEventListener(
+      "click",
+      (event) => {
+        if (Date.now() >= suppressClickUntil) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      true,
+    );
   }
 
   private renderTags(
