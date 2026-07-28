@@ -120,8 +120,8 @@ Set the weight to 0 to disable active-body mention scanning.
 ## Features
 
 - Sidebar listing related notes for the active file
-- Hover a row for the score breakdown; Cmd/Ctrl-hover for the note preview
-- Per-row **append-link button** (appends a `[[link]]` to the active note; other notes are never modified) and **copy button**
+- Hover a row or tap its score for the score breakdown; Cmd/Ctrl-hover for the note preview
+- Per-row **actions menu** for appending a `[[link]]` to the active note or copying it; other notes are never modified
 - Suggested tags — tags frequent in the result set but missing from the active note; click to add to frontmatter
 - Exclusions: folders / tags / outlinks / content words ([semantics](#exclusion-semantics))
 

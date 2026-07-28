@@ -1,4 +1,4 @@
-import { ItemView, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Menu, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import { t } from "../i18n";
 import type RelatedNotesPlugin from "../main";
 import type { ScoredCandidate, SuggestedTag } from "../types";
@@ -10,6 +10,8 @@ const REASONS_TIP_DELAY_MS = 350;
 
 export class RelatedNotesView extends ItemView {
   private reasonsTipEl: HTMLElement | null = null;
+  private reasonsTipAnchorEl: HTMLElement | null = null;
+  private reasonsTipTriggerEl: HTMLButtonElement | null = null;
   private reasonsTipTimer: number | undefined;
   private lastModifier = false;
 
@@ -61,6 +63,18 @@ export class RelatedNotesView extends ItemView {
       this.containerEl,
       "scroll",
       () => this.hideReasonsTip(),
+      true,
+    );
+    this.registerDomEvent(
+      document,
+      "pointerdown",
+      (event: PointerEvent) => {
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (this.reasonsTipEl?.contains(target)) return;
+        if (this.reasonsTipAnchorEl?.contains(target)) return;
+        this.hideReasonsTip();
+      },
       true,
     );
     this.render();
@@ -195,9 +209,26 @@ export class RelatedNotesView extends ItemView {
     this.attachInfoTooltip(self, c);
 
     if (settings.showScores) {
-      self.createEl("span", {
+      const score = self.createEl("button", {
         text: String(c.displayScore),
         cls: "suggested-notes-score",
+        attr: {
+          type: "button",
+          "aria-label": t("ariaShowScoreDetails", {
+            name: displayName(c.path),
+            score: c.displayScore,
+          }),
+          "aria-expanded": "false",
+        },
+      });
+      score.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.reasonsTipEl && this.reasonsTipAnchorEl === self) {
+          this.hideReasonsTip();
+          return;
+        }
+        this.showInfoTip(self, c, score, true);
       });
     }
 
@@ -216,10 +247,7 @@ export class RelatedNotesView extends ItemView {
       if (!reasons.textContent) reasons.remove();
     }
 
-    if (!c.alreadyLinked) {
-      this.attachAppendButton(self, activePath, c.path);
-    }
-    this.attachCopyButton(self, activePath, c.path);
+    this.attachActionsButton(self, activePath, c);
   }
 
   // Standard link-hover wiring: emit "hover-link" with the mouse event and let
@@ -246,6 +274,10 @@ export class RelatedNotesView extends ItemView {
   // grouped by signal (tags / links / backlinks / content words). Suppressed
   // while Cmd/Ctrl is held so it doesn't fight the modifier body preview.
   private attachInfoTooltip(el: HTMLElement, c: ScoredCandidate): void {
+    // Touch browsers can synthesize mouseenter/mouseleave around a tap. Those
+    // synthetic events would immediately close the score card opened by the
+    // score button, so install hover behaviour only on hover-capable devices.
+    if (!window.matchMedia("(hover: hover)").matches) return;
     el.addEventListener("mousemove", (e) => {
       this.lastModifier = e.metaKey || e.ctrlKey;
     });
@@ -262,11 +294,19 @@ export class RelatedNotesView extends ItemView {
     });
   }
 
-  private showInfoTip(anchor: HTMLElement, c: ScoredCandidate): void {
+  private showInfoTip(
+    anchor: HTMLElement,
+    c: ScoredCandidate,
+    trigger: HTMLButtonElement | null = null,
+    showReasons = this.plugin.settings.showSharedReasons,
+  ): void {
     this.hideReasonsTip();
-    const tip = buildInfoTip(c, this.plugin.settings.showSharedReasons);
+    const tip = buildInfoTip(c, showReasons);
     document.body.appendChild(tip);
     this.reasonsTipEl = tip;
+    this.reasonsTipAnchorEl = anchor;
+    this.reasonsTipTriggerEl = trigger;
+    trigger?.setAttribute("aria-expanded", "true");
 
     // Prefer below-left of the line; clamp into the viewport, flip above when
     // there isn't room beneath.
@@ -285,63 +325,69 @@ export class RelatedNotesView extends ItemView {
   private hideReasonsTip(): void {
     window.clearTimeout(this.reasonsTipTimer);
     this.reasonsTipTimer = undefined;
+    this.reasonsTipTriggerEl?.setAttribute("aria-expanded", "false");
     this.reasonsTipEl?.remove();
     this.reasonsTipEl = null;
+    this.reasonsTipAnchorEl = null;
+    this.reasonsTipTriggerEl = null;
   }
 
-  private attachCopyButton(
+  private attachActionsButton(
     self: HTMLElement,
     activePath: string,
-    targetPath: string,
+    candidate: ScoredCandidate,
   ): void {
-    const copyBtn = self.createEl("div", {
-      cls: "clickable-icon suggested-notes-copy",
-      attr: { "aria-label": t("ariaCopyLink") },
+    const actionsBtn = self.createEl("button", {
+      cls: "clickable-icon suggested-notes-actions",
+      attr: {
+        type: "button",
+        "aria-label": t("ariaNoteActions", {
+          name: displayName(candidate.path),
+        }),
+        "aria-haspopup": "menu",
+      },
     });
-    setIcon(copyBtn, "copy");
-    let copiedTimer: number | undefined;
-    copyBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      await this.plugin.copyLinkToClipboard(activePath, targetPath);
-      window.clearTimeout(copiedTimer);
-      copyBtn.empty();
-      setIcon(copyBtn, "check");
-      copyBtn.addClass("is-copied");
-      copiedTimer = window.setTimeout(() => {
-        copyBtn.empty();
-        setIcon(copyBtn, "copy");
-        copyBtn.removeClass("is-copied");
+    setIcon(actionsBtn, "more-horizontal");
+    let feedbackTimer: number | undefined;
+    const showSuccess = () => {
+      window.clearTimeout(feedbackTimer);
+      actionsBtn.empty();
+      setIcon(actionsBtn, "check");
+      actionsBtn.addClass("is-success");
+      feedbackTimer = window.setTimeout(() => {
+        actionsBtn.empty();
+        setIcon(actionsBtn, "more-horizontal");
+        actionsBtn.removeClass("is-success");
       }, 1200);
-    });
-  }
-
-  // Appends the link to the end of the active note (never mutates the
-  // target). Hidden entirely when already linked — see renderRow — since
-  // appending a duplicate link makes no sense there; the copy button stays
-  // available regardless.
-  private attachAppendButton(
-    self: HTMLElement,
-    activePath: string,
-    targetPath: string,
-  ): void {
-    const addBtn = self.createEl("div", {
-      cls: "clickable-icon suggested-notes-insert",
-      attr: { "aria-label": t("ariaAddLink") },
-    });
-    setIcon(addBtn, "link");
-    let addedTimer: number | undefined;
-    addBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      await this.plugin.appendLinkToActive(activePath, targetPath);
-      window.clearTimeout(addedTimer);
-      addBtn.empty();
-      setIcon(addBtn, "check");
-      addBtn.addClass("is-copied");
-      addedTimer = window.setTimeout(() => {
-        addBtn.empty();
-        setIcon(addBtn, "link");
-        addBtn.removeClass("is-copied");
-      }, 1200);
+    };
+    actionsBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const menu = new Menu();
+      if (!candidate.alreadyLinked) {
+        menu.addItem((item) =>
+          item
+            .setTitle(t("menuAddLink"))
+            .setIcon("link")
+            .onClick(async () => {
+              await this.plugin.appendLinkToActive(
+                activePath,
+                candidate.path,
+              );
+              showSuccess();
+            }),
+        );
+      }
+      menu.addItem((item) =>
+        item
+          .setTitle(t("menuCopyLink"))
+          .setIcon("copy")
+          .onClick(async () => {
+            await this.plugin.copyLinkToClipboard(activePath, candidate.path);
+            showSuccess();
+          }),
+      );
+      menu.showAtMouseEvent(event);
     });
   }
 
@@ -437,6 +483,10 @@ function buildInfoTip(
   header.createDiv({
     cls: "suggested-notes-reasons-tip-name",
     text: displayName(c.path),
+  });
+  header.createDiv({
+    cls: "suggested-notes-reasons-tip-score",
+    text: t("tipScore", { score: c.displayScore }),
   });
   const slash = c.path.lastIndexOf("/");
   if (slash > 0) {

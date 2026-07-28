@@ -1,6 +1,6 @@
 # Mobile testing for v0.6.0
 
-Status: **not yet verified on physical mobile devices**.
+Status: **basic use verified on an iPhone 13; full release checklist pending**.
 
 `manifest.json` declares `isDesktopOnly: false`, and the implementation avoids
 desktop-only APIs. This document is the release gate for claiming mobile
@@ -19,7 +19,7 @@ Record the tested commit and exact bundle size for each test round.
 
 | Platform | OS version | Device | Obsidian version | Vault size | Result |
 |---|---|---|---|---:|---|
-| iOS/iPadOS | — | — | — | — | Pending |
+| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use passed; full checklist pending |
 | Android | — | — | — | — | Pending |
 
 Only platforms required for the release need a passing result. Untested
@@ -59,7 +59,7 @@ platforms must remain explicitly labeled as unverified.
 - Mixed terms such as `API設計` remain usable.
 - Vault-specific vocabulary and aliases work.
 - Unlinked title mentions work without counting existing links.
-- Append-link, copy, tag-add, hover/reasons, and settings controls remain usable.
+- Append-link, copy, tag-add, score-tap details, and settings controls remain usable.
 
 ### Resource observations
 

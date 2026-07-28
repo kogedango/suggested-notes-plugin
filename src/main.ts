@@ -707,8 +707,16 @@ export default class RelatedNotesPlugin extends Plugin {
 
   async activateView(): Promise<void> {
     const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null =
-      workspace.getLeavesOfType(VIEW_TYPE_RELATED_NOTES)[0] ?? null;
+    const [existing, ...duplicates] = workspace.getLeavesOfType(
+      VIEW_TYPE_RELATED_NOTES,
+    );
+    // A restored mobile layout can contain more than one leaf for the same
+    // custom view. Obsidian then lists the identical view twice in the sidebar
+    // picker. This view is intentionally a singleton, so retain the first
+    // restored leaf and remove only duplicate instances of our own view.
+    for (const duplicate of duplicates) duplicate.detach();
+
+    let leaf: WorkspaceLeaf | null = existing ?? null;
     if (!leaf) {
       leaf = workspace.getRightLeaf(false);
       if (leaf)
@@ -717,7 +725,7 @@ export default class RelatedNotesPlugin extends Plugin {
           active: true,
         });
     }
-    if (leaf) workspace.revealLeaf(leaf);
+    if (leaf) await workspace.revealLeaf(leaf);
   }
 
   async copyLinkToClipboard(

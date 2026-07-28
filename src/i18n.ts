@@ -7,8 +7,8 @@ export type Locale = "en" | "ja";
 
 const en = {
   // Command palette / view chrome
-  viewName: "Suggested Notes",
-  commandOpenSidebar: "Open Suggested Notes sidebar",
+  viewName: "Suggested Notes — Related to active note",
+  commandOpenSidebar: "Open related notes for the active note",
   commandRebuildIndex: "Rebuild body-token index",
 
   // Settings tab — Max results
@@ -97,8 +97,10 @@ const en = {
   sectionSuggestedTags: "Suggested tags",
 
   // Sidebar — row controls
-  ariaCopyLink: "Copy link",
-  ariaAddLink: "Add link to note",
+  ariaShowScoreDetails: "Show score {score} details for {name}",
+  ariaNoteActions: "Actions for {name}",
+  menuCopyLink: "Copy link",
+  menuAddLink: "Add link to active note",
   suggestAddTag: "Add #{tag} ({count} notes)",
 
   // Sidebar — inline reasons line
@@ -115,6 +117,7 @@ const en = {
   tipLabelSharedContentWords: "Shared content words",
   tipLinksHereNotBack: "Links here, not linked back yet",
   tipTitleAppearsAsPlainText: "Full title appears as plain text",
+  tipScore: "Score: {score}",
 
   // main.ts notices
   noticeBodyTokenRebuilt: "Body-token index rebuilt.",
@@ -129,8 +132,8 @@ const en = {
 };
 
 const ja: Partial<Record<keyof typeof en, string>> = {
-  viewName: "おすすめノート",
-  commandOpenSidebar: "おすすめノートサイドバーを開く",
+  viewName: "Suggested Notes — 開いているノートに関連",
+  commandOpenSidebar: "開いているノートの関連ノートを表示",
   commandRebuildIndex: "本文トークンインデックスを再構築",
 
   settingMaxResults: "最大表示件数",
@@ -224,8 +227,10 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   sectionRelatedNotes: "関連ノート",
   sectionSuggestedTags: "おすすめタグ",
 
-  ariaCopyLink: "リンクをコピー",
-  ariaAddLink: "ノートにリンクを追加",
+  ariaShowScoreDetails: "{name}のスコア{score}の内訳を表示",
+  ariaNoteActions: "{name}の操作",
+  menuCopyLink: "リンクをコピー",
+  menuAddLink: "開いているノートにリンクを追加",
   suggestAddTag: "#{tag} を追加({count}件のノート)",
 
   reasonLinksToThisNote: "このノートへリンク",
@@ -240,6 +245,7 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   tipLabelSharedContentWords: "共有内容語",
   tipLinksHereNotBack: "リンクされていますが、まだリンクを返していません",
   tipTitleAppearsAsPlainText: "候補タイトル全体が通常テキストとして現れます",
+  tipScore: "スコア: {score}",
 
   noticeBodyTokenRebuilt: "本文トークンインデックスを再構築しました。",
   noticeBodyTokenRebuildFailed:
