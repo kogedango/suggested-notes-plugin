@@ -97,10 +97,7 @@ const en = {
   sectionSuggestedTags: "Suggested tags",
 
   // Sidebar — row controls
-  ariaShowScoreDetails: "Show score {score} details for {name}",
-  ariaNoteActions: "Actions for {name}",
-  menuCopyLink: "Copy link",
-  menuAddLink: "Add link to active note",
+  ariaCopyLink: "Copy link",
   suggestAddTag: "Add #{tag} ({count} notes)",
 
   // Sidebar — inline reasons line
@@ -128,7 +125,6 @@ const en = {
   // English words in it, so the English-fallback template already reads
   // correctly in a Japanese vault.
   noticeTagAdded: "+#{tag}",
-  noticeLinkAdded: "Added link to {name}",
 };
 
 const ja: Partial<Record<keyof typeof en, string>> = {
@@ -227,10 +223,7 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   sectionRelatedNotes: "関連ノート",
   sectionSuggestedTags: "おすすめタグ",
 
-  ariaShowScoreDetails: "{name}のスコア{score}の内訳を表示",
-  ariaNoteActions: "{name}の操作",
-  menuCopyLink: "リンクをコピー",
-  menuAddLink: "開いているノートにリンクを追加",
+  ariaCopyLink: "リンクをコピー",
   suggestAddTag: "#{tag} を追加({count}件のノート)",
 
   reasonLinksToThisNote: "このノートへリンク",
@@ -252,7 +245,6 @@ const ja: Partial<Record<keyof typeof en, string>> = {
     "本文トークンインデックスの再構築に失敗しました: {message}",
   noticeMorphologyFailed: "言語解析器の初期化に失敗しました: {message}",
   noticeActiveNoteChanged: "アクティブなノートが変わりました。",
-  noticeLinkAdded: "{name} へのリンクを追加しました",
 };
 
 export type TranslationKey = keyof typeof en;

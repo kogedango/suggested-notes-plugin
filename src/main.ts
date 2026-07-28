@@ -740,29 +740,4 @@ export default class RelatedNotesPlugin extends Plugin {
     );
     await navigator.clipboard.writeText(link);
   }
-
-  // MVP insertion only ever appends to the ACTIVE note — the target note is
-  // never mutated (see CLAUDE.md). activePath is re-checked against the
-  // current active file the same way addTagToActive does, since the button
-  // click is async and the user may have switched notes by the time it runs.
-  async appendLinkToActive(
-    activePath: string,
-    targetPath: string,
-  ): Promise<void> {
-    const active = this.app.workspace.getActiveFile();
-    if (!active || active.path !== activePath) {
-      new Notice(t("noticeActiveNoteChanged"));
-      return;
-    }
-    const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
-    if (!(targetFile instanceof TFile)) return;
-    const link = this.app.fileManager.generateMarkdownLink(
-      targetFile,
-      activePath,
-    );
-    await this.app.vault.process(active, (data) =>
-      data.endsWith("\n") ? `${data}${link}\n` : `${data}\n${link}\n`,
-    );
-    new Notice(t("noticeLinkAdded", { name: targetFile.basename }));
-  }
 }

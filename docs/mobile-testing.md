@@ -59,7 +59,7 @@ platforms must remain explicitly labeled as unverified.
 - Mixed terms such as `API設計` remain usable.
 - Vault-specific vocabulary and aliases work.
 - Unlinked title mentions work without counting existing links.
-- Append-link, copy, tag-add, score-tap details, and settings controls remain usable.
+- Copy, tag-add, score-tap details, and settings controls remain usable.
 
 ### Resource observations
 

@@ -1,4 +1,10 @@
-import { ItemView, Menu, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import {
+  ItemView,
+  Platform,
+  TFile,
+  WorkspaceLeaf,
+  setIcon,
+} from "obsidian";
 import { t } from "../i18n";
 import type RelatedNotesPlugin from "../main";
 import type { ScoredCandidate, SuggestedTag } from "../types";
@@ -11,7 +17,7 @@ const REASONS_TIP_DELAY_MS = 350;
 export class RelatedNotesView extends ItemView {
   private reasonsTipEl: HTMLElement | null = null;
   private reasonsTipAnchorEl: HTMLElement | null = null;
-  private reasonsTipTriggerEl: HTMLButtonElement | null = null;
+  private reasonsTipTriggerEl: HTMLElement | null = null;
   private reasonsTipTimer: number | undefined;
   private lastModifier = false;
 
@@ -209,26 +215,32 @@ export class RelatedNotesView extends ItemView {
     this.attachInfoTooltip(self, c);
 
     if (settings.showScores) {
-      const score = self.createEl("button", {
+      const score = self.createEl("span", {
         text: String(c.displayScore),
         cls: "suggested-notes-score",
         attr: {
-          type: "button",
-          "aria-label": t("ariaShowScoreDetails", {
-            name: displayName(c.path),
-            score: c.displayScore,
-          }),
+          role: "button",
+          tabindex: "0",
           "aria-expanded": "false",
         },
       });
-      score.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
+      const toggleScoreDetails = () => {
         if (this.reasonsTipEl && this.reasonsTipAnchorEl === self) {
           this.hideReasonsTip();
           return;
         }
         this.showInfoTip(self, c, score, true);
+      };
+      score.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleScoreDetails();
+      });
+      score.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleScoreDetails();
       });
     }
 
@@ -247,7 +259,7 @@ export class RelatedNotesView extends ItemView {
       if (!reasons.textContent) reasons.remove();
     }
 
-    this.attachActionsButton(self, activePath, c);
+    this.attachCopyButton(self, activePath, c.path);
   }
 
   // Standard link-hover wiring: emit "hover-link" with the mouse event and let
@@ -297,7 +309,7 @@ export class RelatedNotesView extends ItemView {
   private showInfoTip(
     anchor: HTMLElement,
     c: ScoredCandidate,
-    trigger: HTMLButtonElement | null = null,
+    trigger: HTMLElement | null = null,
     showReasons = this.plugin.settings.showSharedReasons,
   ): void {
     this.hideReasonsTip();
@@ -332,62 +344,30 @@ export class RelatedNotesView extends ItemView {
     this.reasonsTipTriggerEl = null;
   }
 
-  private attachActionsButton(
+  private attachCopyButton(
     self: HTMLElement,
     activePath: string,
-    candidate: ScoredCandidate,
+    targetPath: string,
   ): void {
-    const actionsBtn = self.createEl("button", {
-      cls: "clickable-icon suggested-notes-actions",
-      attr: {
-        type: "button",
-        "aria-label": t("ariaNoteActions", {
-          name: displayName(candidate.path),
-        }),
-        "aria-haspopup": "menu",
-      },
+    if (Platform.isMobileApp) self.addClass("has-mobile-copy");
+    const copyBtn = self.createEl("div", {
+      cls: "clickable-icon suggested-notes-copy",
+      attr: { "aria-label": t("ariaCopyLink") },
     });
-    setIcon(actionsBtn, "more-horizontal");
-    let feedbackTimer: number | undefined;
-    const showSuccess = () => {
-      window.clearTimeout(feedbackTimer);
-      actionsBtn.empty();
-      setIcon(actionsBtn, "check");
-      actionsBtn.addClass("is-success");
-      feedbackTimer = window.setTimeout(() => {
-        actionsBtn.empty();
-        setIcon(actionsBtn, "more-horizontal");
-        actionsBtn.removeClass("is-success");
-      }, 1200);
-    };
-    actionsBtn.addEventListener("click", (event) => {
-      event.preventDefault();
+    setIcon(copyBtn, "copy");
+    let copiedTimer: number | undefined;
+    copyBtn.addEventListener("click", async (event) => {
       event.stopPropagation();
-      const menu = new Menu();
-      if (!candidate.alreadyLinked) {
-        menu.addItem((item) =>
-          item
-            .setTitle(t("menuAddLink"))
-            .setIcon("link")
-            .onClick(async () => {
-              await this.plugin.appendLinkToActive(
-                activePath,
-                candidate.path,
-              );
-              showSuccess();
-            }),
-        );
-      }
-      menu.addItem((item) =>
-        item
-          .setTitle(t("menuCopyLink"))
-          .setIcon("copy")
-          .onClick(async () => {
-            await this.plugin.copyLinkToClipboard(activePath, candidate.path);
-            showSuccess();
-          }),
-      );
-      menu.showAtMouseEvent(event);
+      await this.plugin.copyLinkToClipboard(activePath, targetPath);
+      window.clearTimeout(copiedTimer);
+      copyBtn.empty();
+      setIcon(copyBtn, "check");
+      copyBtn.addClass("is-copied");
+      copiedTimer = window.setTimeout(() => {
+        copyBtn.empty();
+        setIcon(copyBtn, "copy");
+        copyBtn.removeClass("is-copied");
+      }, 1200);
     });
   }
 

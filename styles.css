@@ -31,11 +31,7 @@
 }
 
 .suggested-notes-score {
-  appearance: none;
-  border: 0;
-  margin: 0;
   font-variant-numeric: tabular-nums;
-  font-family: inherit;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
   background-color: var(--background-modifier-hover);
@@ -48,16 +44,6 @@
   min-width: 3ch;
   text-align: center;
   flex-shrink: 0;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-
-.suggested-notes-score:hover,
-.suggested-notes-score:focus-visible,
-.suggested-notes-score[aria-expanded="true"] {
-  color: var(--text-normal);
-  background-color: var(--background-modifier-active-hover);
-  outline: none;
 }
 
 .suggested-notes-inner {
@@ -149,35 +135,30 @@
   word-break: break-word;
 }
 
-.suggested-notes-actions {
-  position: absolute;
-  inset-inline-end: var(--size-4-1);
+.suggested-notes-copy {
+  flex-shrink: 0;
   opacity: 0;
-  pointer-events: none;
   transition: opacity 0.1s;
 }
 
-.suggested-notes-self:hover .suggested-notes-actions,
-.suggested-notes-self:focus-within .suggested-notes-actions,
-.suggested-notes-actions.is-success {
+.suggested-notes-self:hover .suggested-notes-copy,
+.suggested-notes-copy.is-copied {
   opacity: 1;
-  pointer-events: auto;
 }
 
-.suggested-notes-actions.is-success {
+.suggested-notes-copy.is-copied {
   color: var(--text-success, var(--interactive-accent));
 }
 
-@media (hover: none), (pointer: coarse) {
-  .suggested-notes-self {
-    /* One overflow control replaces two permanent action buttons on mobile. */
-    padding-inline-end: calc(var(--size-4-2) + 30px);
-  }
+.suggested-notes-self.has-mobile-copy {
+  padding-inline-end: calc(var(--size-4-2) + 30px);
+}
 
-  .suggested-notes-actions {
-    opacity: 1;
-    pointer-events: auto;
-  }
+.suggested-notes-self.has-mobile-copy .suggested-notes-copy {
+  position: absolute;
+  inset-inline-end: var(--size-4-1);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .suggested-notes-tags-section {

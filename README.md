@@ -14,7 +14,7 @@ Related notes are picked by a weighted score over shared tags, links, backlinks,
 - **Content-aware by default** — title words and salient body words form one deduplicated content signal. Disable body matching to avoid a vault-wide body index
 - **Offline, no AI** — no embeddings, no external APIs
 - **No full-vault scan per query** — inverted indexes narrow candidates before scoring. Mobile is [being verified for the v0.6.0 prerelease](docs/mobile-testing.md)
-- **Never writes to your notes** — plugin state is not stored in frontmatter or tags. Notes change only when you explicitly press the append-link / add-tag buttons
+- **Never writes plugin state to your notes** — notes change only when you explicitly add a suggested tag
 - **UI in Japanese and English** — follows Obsidian's language setting
 
 ## Japanese and English morphology
@@ -121,7 +121,7 @@ Set the weight to 0 to disable active-body mention scanning.
 
 - Sidebar listing related notes for the active file
 - Hover a row or tap its score for the score breakdown; Cmd/Ctrl-hover for the note preview
-- Per-row **actions menu** for appending a `[[link]]` to the active note or copying it; other notes are never modified
+- One per-row **copy-link button** on desktop and mobile; copying never modifies a note
 - Suggested tags — tags frequent in the result set but missing from the active note; click to add to frontmatter
 - Exclusions: folders / tags / outlinks / content words ([semantics](#exclusion-semantics))
 
