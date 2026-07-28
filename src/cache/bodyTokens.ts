@@ -1,45 +1,61 @@
 import { App, TFile } from "obsidian";
-import { tokenize } from "../util/tokenize";
+import type { TokenCounter } from "../analysis/types";
+import type { TitleTokenIndex } from "./titleTokens";
 
-// Body-token matching uses a corpus/query split:
-//
-//   Corpus  — the slow-moving index over ALL notes (df + per-note salient
-//             tokens + inverted index). Rebuilt coarsely (on enable, on
-//             startup, manually, and a debounced pass after edits settle),
-//             NOT maintained per keystroke. This is what candidate notes are
-//             matched against.
-//   Query   — the active note's salient tokens, computed fresh on demand from
-//             a single cachedRead each time you switch notes. Always current.
-//
-// Keeping only the active note live (and the corpus coarse) removes the
-// incremental-update machinery that previously caused the df-corruption race
-// and the unbounded per-note token retention. The deliberate trade-off: a
-// recently-edited *other* note's body signal lags until the next rebuild.
+export interface BodyTokenCacheEntry {
+  path: string;
+  mtime: number;
+  size: number;
+  tokens: Array<[string, number]>;
+}
+
+interface FileStamp {
+  mtime: number;
+  size: number;
+}
+
+// Raw per-note counts are retained so corpus df and salience can be updated
+// exactly after one file changes, without reading or tokenizing every other
+// note again.
 export class BodyTokenIndex {
-  // Corpus: per-note salient tokens (top-N by log(1+TF) * IDF), used for
-  // candidate notes.
+  private counts = new Map<string, Map<string, number>>();
+  private stamps = new Map<string, FileStamp>();
   private salient = new Map<string, Set<string>>();
-  // Corpus: token -> notes whose salient set contains it.
   private inverted = new Map<string, Set<string>>();
-  // Corpus: global doc-freq over full token sets (drives IDF).
+  // Raw body occurrence index. Unlike `inverted`, this includes tokens that
+  // are not currently salient. It lets a one-note edit rerank exactly the
+  // other notes whose score can change when one of those tokens' df changes.
+  private rawInverted = new Map<string, Set<string>>();
   private df = new Map<string, number>();
-  // Corpus: standalone-word units seen on their own somewhere in the vault
-  // (kanji 2-grams and whole katakana words), used to gate interior sub-units
-  // of longer runs. Frozen per rebuild like df (a unit new to the vault is not
-  // trusted as a word until the next coarse rebuild — the same staleness
-  // trade-off df already accepts).
-  private standalone = new Set<string>();
   private totalNotes = 0;
   private idfCache = new Map<string, number>();
   private built = false;
+  private generation = 0;
+  private topN = 40;
+  private pathRevisions = new Map<string, number>();
 
-  constructor(private app: App) {}
+  constructor(
+    private app: App,
+    private analyzer: TokenCounter,
+    // When available, df is computed over title ∪ raw-body occurrence. This
+    // keeps a body word that occurs in only one body when another note uses it
+    // in its title — necessary for title/body cross-field matching.
+    private titles?: TitleTokenIndex,
+  ) {}
+
+  setAnalyzer(analyzer: TokenCounter): void {
+    this.analyzer = analyzer;
+  }
 
   clear(): void {
+    this.generation++;
+    this.counts = new Map();
+    this.stamps = new Map();
+    this.pathRevisions = new Map();
     this.salient = new Map();
     this.inverted = new Map();
+    this.rawInverted = new Map();
     this.df = new Map();
-    this.standalone = new Set();
     this.idfCache.clear();
     this.totalNotes = 0;
     this.built = false;
@@ -48,8 +64,6 @@ export class BodyTokenIndex {
   isBuilt(): boolean {
     return this.built;
   }
-
-  // --- Corpus lookups (candidate notes / scoring) ---
 
   salientFor(path: string): Set<string> {
     return this.salient.get(path) ?? EMPTY;
@@ -67,213 +81,292 @@ export class BodyTokenIndex {
     const cached = this.idfCache.get(token);
     if (cached !== undefined) return cached;
     const n = this.df.get(token) ?? 0;
-    const v = n > 0 && this.totalNotes > 0 ? Math.log(this.totalNotes / n) : 0;
-    this.idfCache.set(token, v);
-    return v;
+    const value =
+      n > 0 && this.totalNotes > 0 ? Math.log(this.totalNotes / n) : 0;
+    this.idfCache.set(token, value);
+    return value;
   }
 
-  // --- Query (active note, on demand) ---
-
-  // Tokenize the active note now and rank against the current corpus df.
-  // Nothing is retained — this is the live query, so it can't go stale and
-  // can't race with a concurrent edit. Returns empty until the corpus exists.
-  // `segment` must match the flag the corpus was built with, or query and
-  // corpus tokens drift apart — the caller passes the same setting to both.
-  async computeSalient(
-    file: TFile,
-    topN: number,
-    segment: boolean,
-  ): Promise<Set<string>> {
+  computeSalientText(body: string, topN: number): Set<string> {
     if (!this.built) return new Set();
-    const body = await this.app.vault.cachedRead(file);
     return rankSalient(
-      tokenize(body, segment, this.standalone),
+      this.analyzer.tokenize(body),
       topN,
       this.df,
       this.totalNotes,
     );
   }
 
-  // --- Cheap corpus maintenance ---
-
-  // Single-note touch-up after an edit settles (Obsidian autosaves ~2s after
-  // typing stops, which fires metadataCache "changed"): re-rank just this
-  // note's salient set against the *current* df, so the note you just wrote
-  // becomes discoverable from other notes immediately. `df` is NOT updated —
-  // incremental df maintenance is the corruption-prone path this design
-  // removed; brand-new vocabulary enters df at the next coarse rebuild (it
-  // couldn't match anything before then anyway, since matching needs df >= 2).
-  async refreshNote(
-    file: TFile,
-    topN: number,
-    segment: boolean,
-  ): Promise<void> {
+  async refreshNote(file: TFile, topN: number): Promise<void> {
     if (!this.built) return;
-    const tokens = tokenize(
-      await this.app.vault.cachedRead(file),
-      segment,
-      this.standalone,
-    );
-    const next = rankSalient(tokens, topN, this.df, this.totalNotes);
-    this.remove(file.path);
-    this.salient.set(file.path, next);
-    for (const t of next) {
-      let inv = this.inverted.get(t);
-      if (!inv) {
-        inv = new Set();
-        this.inverted.set(t, inv);
-      }
-      inv.add(file.path);
+    const path = file.path;
+    const revision = (this.pathRevisions.get(path) ?? 0) + 1;
+    this.pathRevisions.set(path, revision);
+    const body = await this.app.vault.cachedRead(file);
+    // A later save, delete, or rename superseded this read while it was in
+    // flight. Let that operation own the cache entry.
+    if (this.pathRevisions.get(path) !== revision) return;
+    this.generation++;
+    const nextCounts = this.analyzer.tokenize(body);
+    this.stamps.set(path, stampOf(file));
+    if (this.counts.has(path)) {
+      this.replaceExistingCounts(path, nextCounts, topN);
+    } else {
+      // Creating a note can change totalNotes and title/body union df, which
+      // affects every token's IDF and the 40% eligibility threshold.
+      this.counts.set(path, nextCounts);
+      this.recompute(topN);
     }
   }
 
-  // Rename/delete don't change note text, so a full rebuild is wasted I/O —
-  // just re-key the salient/inverted entries. `df` is deliberately left
-  // untouched (slightly stale until the next coarse rebuild): incremental df
-  // maintenance is the path that caused the corruption race this design
-  // removed, and IDF only needs to be statistically right.
-
   rename(oldPath: string, newPath: string): void {
-    const sal = this.salient.get(oldPath);
-    if (!sal) return;
-    this.salient.delete(oldPath);
-    this.salient.set(newPath, sal);
-    for (const t of sal) {
-      const inv = this.inverted.get(t);
-      if (inv?.delete(oldPath)) inv.add(newPath);
-    }
+    this.generation++;
+    this.bumpPathRevision(oldPath);
+    this.bumpPathRevision(newPath);
+    const counts = this.counts.get(oldPath);
+    const stamp = this.stamps.get(oldPath);
+    this.counts.delete(oldPath);
+    this.stamps.delete(oldPath);
+    if (counts) this.counts.set(newPath, counts);
+    if (stamp) this.stamps.set(newPath, stamp);
+    if (this.built) this.recompute(this.topN);
   }
 
   remove(path: string): void {
-    const sal = this.salient.get(path);
-    if (!sal) return;
-    this.salient.delete(path);
-    for (const t of sal) {
-      const inv = this.inverted.get(t);
-      if (!inv) continue;
-      inv.delete(path);
-      if (inv.size === 0) this.inverted.delete(t);
+    this.generation++;
+    this.bumpPathRevision(path);
+    const removed = this.counts.delete(path);
+    this.stamps.delete(path);
+    if (removed && this.built) this.recompute(this.topN);
+  }
+
+  restore(entries: unknown, topN: number): boolean {
+    if (!Array.isArray(entries)) return false;
+    const nextCounts = new Map<string, Map<string, number>>();
+    const nextStamps = new Map<string, FileStamp>();
+    for (const entry of entries) {
+      if (!isBodyTokenCacheEntry(entry)) return false;
+      nextCounts.set(entry.path, new Map(entry.tokens));
+      nextStamps.set(entry.path, { mtime: entry.mtime, size: entry.size });
+    }
+    this.counts = nextCounts;
+    this.stamps = nextStamps;
+    this.recompute(topN);
+    return true;
+  }
+
+  snapshot(): BodyTokenCacheEntry[] {
+    return [...this.counts].map(([path, tokens]) => {
+      const stamp = this.stamps.get(path) ?? { mtime: 0, size: 0 };
+      return {
+        path,
+        mtime: stamp.mtime,
+        size: stamp.size,
+        tokens: [...tokens],
+      };
+    });
+  }
+
+  rerank(topN: number): void {
+    if (this.built) this.recompute(topN);
+  }
+
+  async syncAll(topN: number, chunkSize = 32): Promise<void> {
+    await this.build(topN, false, chunkSize);
+  }
+
+  async rebuildAll(topN: number): Promise<void> {
+    await this.build(topN, true, 32);
+  }
+
+  private async build(
+    topN: number,
+    force: boolean,
+    chunkSize: number,
+  ): Promise<void> {
+    for (;;) {
+      const startedAt = this.generation;
+      const files = this.app.vault.getMarkdownFiles();
+      const nextCounts = new Map<string, Map<string, number>>();
+      const nextStamps = new Map<string, FileStamp>();
+
+      for (let i = 0; i < files.length; i += chunkSize) {
+        await Promise.all(
+          files.slice(i, i + chunkSize).map(async (file) => {
+            const stamp = stampOf(file);
+            const cachedStamp = this.stamps.get(file.path);
+            const cached = this.counts.get(file.path);
+            if (
+              !force &&
+              cached &&
+              cachedStamp?.mtime === stamp.mtime &&
+              cachedStamp.size === stamp.size
+            ) {
+              nextCounts.set(file.path, new Map(cached));
+              nextStamps.set(file.path, stamp);
+              return;
+            }
+            try {
+              const body = await this.app.vault.cachedRead(file);
+              nextCounts.set(file.path, this.analyzer.tokenize(body));
+              nextStamps.set(file.path, stamp);
+            } catch (error) {
+              console.error(
+                `Suggested Notes: failed to read "${file.path}" during body-token rebuild, skipping it`,
+                error,
+              );
+            }
+          }),
+        );
+        await yieldToEventLoop();
+      }
+      if (startedAt !== this.generation) continue;
+      this.counts = nextCounts;
+      this.stamps = nextStamps;
+      this.recompute(topN);
+      return;
     }
   }
 
-  // --- Corpus rebuild (coarse) ---
-
-  async rebuildAll(topN: number, segment: boolean): Promise<void> {
-    const files = this.app.vault.getMarkdownFiles();
-    const nextStandalone = new Set<string>();
-    const perFileTokens = new Map<string, Map<string, number>>();
-
-    // Pass 1: one read AND one scan per note. Tokenize ungated (the standalone
-    // set isn't complete yet, so interior sub-units can't be filtered here) and
-    // harvest the standalone-word units from the same matchAll via the fourth
-    // arg — no separate corpus pass over the body.
-    const CHUNK = 32;
-    for (let i = 0; i < files.length; i += CHUNK) {
-      await Promise.all(
-        files.slice(i, i + CHUNK).map(async (f) => {
-          // A single file's read failing (permission error, race with a
-          // delete mid-rebuild, etc.) must not abort the whole rebuild — it
-          // just drops that note from this corpus generation, same as if it
-          // were empty. Errors are logged, not swallowed silently.
-          try {
-            const body = await this.app.vault.cachedRead(f);
-            const tokens = tokenize(body, segment, undefined, nextStandalone);
-            if (tokens.size === 0) return; // skip empty notes: they only dilute IDF
-            perFileTokens.set(f.path, tokens);
-          } catch (err) {
-            console.error(
-              `Suggested Notes: failed to read "${f.path}" during body-token rebuild, skipping it`,
-              err,
-            );
-          }
-        }),
-      );
-      await yieldToEventLoop(); // keep large / mobile vaults responsive
-    }
-
-    // Pass 2: the standalone set is now final, so gate each note's interior
-    // sub-units (drop morpheme-straddling kanji 2-grams like 本語 / 員何 and
-    // never-standalone katakana sub-words) and build df over the gated tokens.
-    // Gating in place avoids a second read of every note; it is equivalent to
-    // tokenize()'s standalone gate — a full run is always in nextStandalone (it
-    // was harvested above), so only never-standalone interior sub-units drop.
-    // df stays a presence count (0/1 per note) — TF (the per-note occurrence
-    // counts tokenize() returns) only feeds salience ranking below, never df.
-    const nextDf = new Map<string, number>();
-    for (const tokens of perFileTokens.values()) {
-      for (const t of tokens.keys()) {
-        if (isInteriorArtifact(t, nextStandalone)) {
-          tokens.delete(t);
-          continue;
-        }
-        nextDf.set(t, (nextDf.get(t) ?? 0) + 1);
+  private recompute(topN: number): void {
+    this.topN = topN;
+    const nextDf = new Map<string, number>(
+      this.titles?.documentFrequencyEntries() ?? [],
+    );
+    const nextRawInverted = new Map<string, Set<string>>();
+    for (const [path, counts] of this.counts) {
+      for (const token of counts.keys()) {
+        addPathToTokenIndex(nextRawInverted, token, path);
+        if (this.titles?.tokensFor(path).has(token)) continue;
+        nextDf.set(token, (nextDf.get(token) ?? 0) + 1);
       }
     }
 
-    // Derive the whole new corpus into locals first. The live corpus keeps
-    // serving queries until the single swap at the end, so a refresh that
-    // lands mid-rebuild (we yield below) never sees a half-built index.
-    const totalNotes = perFileTokens.size;
+    const totalNotes = Math.max(
+      this.counts.size,
+      this.titles?.totalNotesCount() ?? 0,
+    );
     const nextSalient = new Map<string, Set<string>>();
     const nextInverted = new Map<string, Set<string>>();
-    let processed = 0;
-    for (const [path, tokens] of perFileTokens) {
-      const salient = rankSalient(tokens, topN, nextDf, totalNotes);
-      nextSalient.set(path, salient);
-      for (const t of salient) {
-        let inv = nextInverted.get(t);
-        if (!inv) {
-          inv = new Set();
-          nextInverted.set(t, inv);
-        }
-        inv.add(path);
-      }
-      if ((++processed & 0xff) === 0) await yieldToEventLoop();
+    for (const [path, counts] of this.counts) {
+      const selected = rankSalient(counts, topN, nextDf, totalNotes);
+      nextSalient.set(path, selected);
+      addToInverted(nextInverted, path, selected);
     }
 
     this.df = nextDf;
-    this.standalone = nextStandalone;
     this.totalNotes = totalNotes;
     this.salient = nextSalient;
     this.inverted = nextInverted;
+    this.rawInverted = nextRawInverted;
     this.idfCache.clear();
     this.built = true;
   }
+
+  private replaceExistingCounts(
+    path: string,
+    nextCounts: Map<string, number>,
+    topN: number,
+  ): void {
+    const previousCounts = this.counts.get(path);
+    if (!previousCounts) {
+      this.counts.set(path, nextCounts);
+      this.recompute(topN);
+      return;
+    }
+
+    this.topN = topN;
+    const previousTokens = new Set(previousCounts.keys());
+    const nextTokens = new Set(nextCounts.keys());
+    const changedDfTokens = new Set<string>();
+
+    for (const token of previousTokens) {
+      if (!nextTokens.has(token)) {
+        removePathFromTokenIndex(this.rawInverted, token, path);
+        // Body occurrence does not add another document when the same note's
+        // title already carries the token.
+        if (!this.titles?.tokensFor(path).has(token)) {
+          const value = (this.df.get(token) ?? 1) - 1;
+          if (value > 0) this.df.set(token, value);
+          else this.df.delete(token);
+          changedDfTokens.add(token);
+        }
+      }
+    }
+    for (const token of nextTokens) {
+      if (!previousTokens.has(token)) {
+        addPathToTokenIndex(this.rawInverted, token, path);
+        if (!this.titles?.tokensFor(path).has(token)) {
+          this.df.set(token, (this.df.get(token) ?? 0) + 1);
+          changedDfTokens.add(token);
+        }
+      }
+    }
+
+    this.counts.set(path, nextCounts);
+    const affected = new Set<string>([path]);
+    for (const token of changedDfTokens) {
+      this.idfCache.delete(token);
+      for (const affectedPath of this.rawInverted.get(token) ?? EMPTY) {
+        affected.add(affectedPath);
+      }
+    }
+    this.rerankPaths(affected);
+  }
+
+  private rerankPaths(paths: Iterable<string>): void {
+    for (const path of paths) {
+      const counts = this.counts.get(path);
+      if (!counts) continue;
+      const previous = this.salient.get(path) ?? EMPTY;
+      for (const token of previous) {
+        removePathFromTokenIndex(this.inverted, token, path);
+      }
+      const selected = rankSalient(
+        counts,
+        this.topN,
+        this.df,
+        this.totalNotes,
+      );
+      this.salient.set(path, selected);
+      addToInverted(this.inverted, path, selected);
+    }
+  }
+
+  private bumpPathRevision(path: string): void {
+    this.pathRevisions.set(path, (this.pathRevisions.get(path) ?? 0) + 1);
+  }
 }
 
-// An interior sub-unit that never appears as a standalone word is pure noise:
-// it only re-matches the compound the full run already matches. Two shapes —
-// a length-2 kanji 2-gram straddling a morpheme boundary (本語 from 日本語, 員何
-// from 全員何も), or a katakana sub-word that never stands alone (the cross-
-// morpheme fragments of リチウムバッテリー). A genuine full run is always in the
-// standalone set (self-harvested), so it survives. Mirrors tokenize()'s gate
-// for the query side.
-function isInteriorArtifact(token: string, standalone: Set<string>): boolean {
-  if (/^[一-龥々]{2}$/.test(token)) return !standalone.has(token);
-  if (/^[ァ-ヶー]+$/.test(token)) return !standalone.has(token);
-  return false;
+function stampOf(file: TFile): FileStamp {
+  return { mtime: file.stat.mtime, size: file.stat.size };
 }
 
-// Low-df reserve: after the top-N cut, a small extra allowance for the note's
-// rarest eligible tokens (df <= RESERVE_DF_MAX) that the cut evicted. A long,
-// vocabulary-rich note can push a genuinely rare shared word out of its top-N
-// when high-TF mid-frequency words fill the budget (body-recall-hiragana-
-// decision-2026-07-22.md, mechanism 2). The reserve recovers those without
-// enlarging the budget for common words. It is *purely additive* — the
-// returned set is always a superset of the top-N — so it can only add shared
-// candidate pairs, never remove one (non-destructive by construction, since it
-// touches neither df nor totalNotes, which are fixed before ranking).
+function isBodyTokenCacheEntry(value: unknown): value is BodyTokenCacheEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.path === "string" &&
+    typeof entry.mtime === "number" &&
+    Number.isFinite(entry.mtime) &&
+    typeof entry.size === "number" &&
+    Number.isFinite(entry.size) &&
+    Array.isArray(entry.tokens) &&
+    entry.tokens.every(
+      (pair) =>
+        Array.isArray(pair) &&
+        pair.length === 2 &&
+        typeof pair[0] === "string" &&
+        typeof pair[1] === "number" &&
+        Number.isFinite(pair[1]) &&
+        pair[1] > 0,
+    )
+  );
+}
+
 const RESERVE_DF_MAX = 10;
 const RESERVE_SIZE = 20;
 
-// Rank a note's tokens (with their in-body occurrence counts) against the
-// given doc-freq table and keep the top-N by log(1+TF) * IDF, so a token the
-// note repeats beats an equally-rare token it only mentions once (design-
-// review-2026-07-02 #5) while df/IDF themselves stay presence-based (0/1 per
-// note) — TF only decides which tokens make the cut, not what "rare" means.
-// Plus a bounded low-df reserve (see RESERVE_DF_MAX above). Pure: used both for
-// corpus builds (against the under-construction df) and for live queries
-// (against the current corpus df). Exported for direct unit testing.
 export function rankSalient(
   tokens: Map<string, number>,
   topN: number,
@@ -283,33 +376,69 @@ export function rankSalient(
   reserveSize = RESERVE_SIZE,
 ): Set<string> {
   const maxDf = Math.max(2, Math.floor(totalNotes * 0.4));
-  const ranked: Array<{ t: string; n: number; score: number }> = [];
-  for (const [t, tf] of tokens) {
-    const n = df.get(t) ?? 0;
-    if (n < 2) continue; // singletons can't produce shared signal
-    if (n > maxDf) continue; // stop-word-like
-    const idf = Math.log(totalNotes / n);
-    ranked.push({ t, n, score: Math.log(1 + tf) * idf });
+  const ranked: Array<{ token: string; df: number; score: number }> = [];
+  for (const [token, tf] of tokens) {
+    const documentFrequency = df.get(token) ?? 0;
+    if (documentFrequency < 2 || documentFrequency > maxDf) continue;
+    ranked.push({
+      token,
+      df: documentFrequency,
+      score: Math.log(1 + tf) * Math.log(totalNotes / documentFrequency),
+    });
   }
   ranked.sort((a, b) => b.score - a.score);
 
-  const set = new Set<string>();
-  for (const r of ranked.slice(0, topN)) set.add(r.t);
-  // Reserve pass over the tokens the top-N cut evicted (already score-sorted,
-  // so the most salient rare ones come first): keep only the genuinely rare
-  // (df <= reserveDfMax), up to reserveSize. Adds to the top-N set, never
-  // removes from it.
+  const selected = new Set<string>();
+  for (const item of ranked.slice(0, topN)) selected.add(item.token);
   let reserved = 0;
   for (let i = topN; i < ranked.length && reserved < reserveSize; i++) {
-    if (ranked[i].n > reserveDfMax) continue;
-    set.add(ranked[i].t);
+    if (ranked[i].df > reserveDfMax) continue;
+    selected.add(ranked[i].token);
     reserved++;
   }
-  return set;
+  return selected;
 }
 
-const EMPTY: Set<string> = new Set();
+function addToInverted(
+  inverted: Map<string, Set<string>>,
+  path: string,
+  tokens: Iterable<string>,
+): void {
+  for (const token of tokens) {
+    let paths = inverted.get(token);
+    if (!paths) {
+      paths = new Set();
+      inverted.set(token, paths);
+    }
+    paths.add(path);
+  }
+}
+
+function addPathToTokenIndex(
+  index: Map<string, Set<string>>,
+  token: string,
+  path: string,
+): void {
+  let paths = index.get(token);
+  if (!paths) {
+    paths = new Set();
+    index.set(token, paths);
+  }
+  paths.add(path);
+}
+
+function removePathFromTokenIndex(
+  index: Map<string, Set<string>>,
+  token: string,
+  path: string,
+): void {
+  const paths = index.get(token);
+  paths?.delete(path);
+  if (paths?.size === 0) index.delete(token);
+}
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+const EMPTY: Set<string> = new Set();

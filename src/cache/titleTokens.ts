@@ -1,128 +1,214 @@
+import type { TokenCounter } from "../analysis/types";
 import { basename } from "../util/path";
-import { tokenize } from "../util/tokenize";
 import type { SnapshotReader } from "./store";
 
-const EMPTY: Set<string> = new Set();
+export interface TitleTokenCacheEntry {
+  path: string;
+  tokens: string[];
+}
 
-// Title-token signal (plan C): shared filename words. Metadata-only (reads
-// only `FileSnapshot.path`, never a note body) and on by default — unlike
-// bodyTokenEnabled, there is no toggle to turn this off; `titleWeight` is
-// the only knob.
-//
-// Unlike BodyTokenIndex, there's no corpus/query split here: a basename is
-// already sitting in every FileSnapshot's path, so there is no I/O to defer
-// or a "live query" to compute — every lookup below is just a read from the
-// one corpus, built lazily.
-//
-// Maintenance is a dirty-flag + full-rebuild-on-next-read, the same lazy
-// pattern IDFTables already uses for tag/link IDF — not truly incremental
-// per-note updates. A genuinely incremental design would have to re-derive
-// the standalone-word set (below) on every add/rename/delete, since a single
-// renamed title can introduce or remove a standalone unit that gates OTHER
-// titles' interior sub-tokens — exactly the kind of cross-note dependency
-// that df/standalone freezing exists to avoid elsewhere in this codebase.
-// Titles are short strings, so re-tokenizing the whole title corpus is cheap;
-// the full-rebuild fallback the body-token corpus reserves for expensive file
-// I/O is the simple, obviously-correct choice here.
+// One analyzer instance and one canonical representation are shared with the
+// body index. Initial title analysis yields between bounded batches.
 export class TitleTokenIndex {
-  private dirty = true;
-  // path -> that note's title tokens (gated by the title corpus's own
-  // standalone set, independent of the body-token corpus's).
   private tokens = new Map<string, Set<string>>();
-  // title token -> paths whose title contains it.
   private inverted = new Map<string, Set<string>>();
-  // Doc-freq over title tokens, presence-based (0/1 per note), drives IDF.
   private df = new Map<string, number>();
   private totalNotes = 0;
   private idfCache = new Map<string, number>();
+  private generation = 0;
 
-  constructor(private store: SnapshotReader) {}
+  constructor(
+    private store: SnapshotReader,
+    private analyzer: TokenCounter,
+  ) {}
 
-  markDirty(): void {
-    this.dirty = true;
+  setAnalyzer(analyzer: TokenCounter): void {
+    this.analyzer = analyzer;
+  }
+
+  invalidateAnalysis(): void {
+    this.generation++;
+  }
+
+  restore(entries: unknown): boolean {
+    if (!Array.isArray(entries)) return false;
+    const nextTokens = new Map<string, Set<string>>();
+    for (const entry of entries) {
+      if (!isTitleTokenCacheEntry(entry)) return false;
+      nextTokens.set(entry.path, new Set(entry.tokens));
+    }
+    this.replaceTokens(nextTokens);
+    return true;
+  }
+
+  snapshot(): TitleTokenCacheEntry[] {
+    return [...this.tokens].map(([path, tokens]) => ({
+      path,
+      tokens: [...tokens],
+    }));
+  }
+
+  // Reuses restored entries and analyzes only new/renamed titles. Deleted
+  // paths disappear when the complete current map is swapped in.
+  async syncAll(chunkSize = 32): Promise<void> {
+    for (;;) {
+      const startedAt = this.generation;
+      const paths = [...this.store.all()].map((snapshot) => snapshot.path);
+      const nextTokens = new Map<string, Set<string>>();
+
+      for (let i = 0; i < paths.length; i += chunkSize) {
+        for (const path of paths.slice(i, i + chunkSize)) {
+          const cached = this.tokens.get(path);
+          nextTokens.set(
+            path,
+            cached
+              ? new Set(cached)
+              : new Set(this.analyzer.tokenize(basename(path)).keys()),
+          );
+        }
+        await yieldToEventLoop();
+      }
+      if (startedAt !== this.generation) continue;
+      this.replaceTokens(nextTokens);
+      return;
+    }
+  }
+
+  async rebuildAll(chunkSize = 32): Promise<void> {
+    // Metadata events may add/rename/delete paths while a long initial pass is
+    // yielding. Repeat from the current snapshot until one generation is
+    // stable, then swap the complete maps atomically.
+    for (;;) {
+      const startedAt = this.generation;
+      const paths = [...this.store.all()].map((snapshot) => snapshot.path);
+      const nextTokens = new Map<string, Set<string>>();
+      const nextInverted = new Map<string, Set<string>>();
+      const nextDf = new Map<string, number>();
+
+      for (let i = 0; i < paths.length; i += chunkSize) {
+        for (const path of paths.slice(i, i + chunkSize)) {
+          const set = new Set(this.analyzer.tokenize(basename(path)).keys());
+          nextTokens.set(path, set);
+          addPath(nextInverted, nextDf, path, set);
+        }
+        await yieldToEventLoop();
+      }
+      if (startedAt !== this.generation) continue;
+
+      this.tokens = nextTokens;
+      this.inverted = nextInverted;
+      this.df = nextDf;
+      this.totalNotes = paths.length;
+      this.idfCache.clear();
+      return;
+    }
+  }
+
+  add(path: string): void {
+    if (this.tokens.has(path)) return;
+    this.generation++;
+    const set = new Set(this.analyzer.tokenize(basename(path)).keys());
+    this.tokens.set(path, set);
+    this.totalNotes++;
+    addPath(this.inverted, this.df, path, set);
+    this.idfCache.clear();
+  }
+
+  remove(path: string): void {
+    this.generation++;
+    const set = this.tokens.get(path);
+    if (!set) return;
+    this.tokens.delete(path);
+    this.totalNotes--;
+    for (const token of set) {
+      const nextDf = (this.df.get(token) ?? 1) - 1;
+      if (nextDf > 0) this.df.set(token, nextDf);
+      else this.df.delete(token);
+      const paths = this.inverted.get(token);
+      paths?.delete(path);
+      if (paths?.size === 0) this.inverted.delete(token);
+    }
+    this.idfCache.clear();
+  }
+
+  rename(oldPath: string, newPath: string): void {
+    this.remove(oldPath);
+    this.add(newPath);
   }
 
   tokensFor(path: string): Set<string> {
-    this.ensureFresh();
     return this.tokens.get(path) ?? EMPTY;
   }
 
   filesWithToken(token: string): Set<string> {
-    this.ensureFresh();
     return this.inverted.get(token) ?? EMPTY;
   }
 
   notesWithTokenCount(token: string): number {
-    this.ensureFresh();
     return this.df.get(token) ?? 0;
   }
 
   totalNotesCount(): number {
-    this.ensureFresh();
     return this.totalNotes;
   }
 
+  documentFrequencyEntries(): IterableIterator<[string, number]> {
+    return this.df.entries();
+  }
+
   idf(token: string): number {
-    this.ensureFresh();
     const cached = this.idfCache.get(token);
     if (cached !== undefined) return cached;
     const n = this.df.get(token) ?? 0;
-    const v = n > 0 && this.totalNotes > 0 ? Math.log(this.totalNotes / n) : 0;
-    this.idfCache.set(token, v);
-    return v;
+    const value =
+      n > 0 && this.totalNotes > 0 ? Math.log(this.totalNotes / n) : 0;
+    this.idfCache.set(token, value);
+    return value;
   }
 
-  private ensureFresh(): void {
-    if (!this.dirty) return;
-    this.rebuild();
-    this.dirty = false;
-  }
-
-  // Two passes over every title, mirroring BodyTokenIndex.rebuildAll's shape
-  // (minus the async I/O, since a basename needs no file read):
-  //   Pass 1 harvests the title corpus's own standalone-word set (kanji
-  //   2-grams / katakana words that occur as a title on their own somewhere
-  //   in the vault) — this is what keeps morpheme-straddling 2-grams like
-  //   本語 out of "日本語入門" without also losing 日本 as a shared word with
-  //   "日本の歴史".
-  //   Pass 2 tokenizes each title again, this time gated by that now-final
-  //   standalone set, and builds df/inverted off the gated token sets.
-  // `segment` is always false: TinySegmenter is tuned for prose (okurigana,
-  // hiragana words) and a title is one short noun-phrase-like string, not a
-  // sentence — a hiragana-only title (already a known gap; the script-run
-  // regex needs kanji/katakana/ascii to fire) would need segmenter support to
-  // recover, which is out of scope for this pass. Titles are also indexed
-  // regardless of bodyTokenSegmenterEnabled, so query/corpus can't drift.
-  private rebuild(): void {
-    const standalone = new Set<string>();
-    for (const snap of this.store.all()) {
-      tokenize(basename(snap.path), false, undefined, standalone);
+  private replaceTokens(nextTokens: Map<string, Set<string>>): void {
+    const nextInverted = new Map<string, Set<string>>();
+    const nextDf = new Map<string, number>();
+    for (const [path, tokens] of nextTokens) {
+      addPath(nextInverted, nextDf, path, tokens);
     }
-
-    const tokens = new Map<string, Set<string>>();
-    const inverted = new Map<string, Set<string>>();
-    const df = new Map<string, number>();
-    let totalNotes = 0;
-    for (const snap of this.store.all()) {
-      totalNotes++;
-      const tf = tokenize(basename(snap.path), false, standalone);
-      const set = new Set(tf.keys());
-      tokens.set(snap.path, set);
-      for (const tok of set) {
-        df.set(tok, (df.get(tok) ?? 0) + 1);
-        let inv = inverted.get(tok);
-        if (!inv) {
-          inv = new Set();
-          inverted.set(tok, inv);
-        }
-        inv.add(snap.path);
-      }
-    }
-
-    this.tokens = tokens;
-    this.inverted = inverted;
-    this.df = df;
-    this.totalNotes = totalNotes;
+    this.tokens = nextTokens;
+    this.inverted = nextInverted;
+    this.df = nextDf;
+    this.totalNotes = nextTokens.size;
     this.idfCache.clear();
   }
 }
+
+function isTitleTokenCacheEntry(value: unknown): value is TitleTokenCacheEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.path === "string" &&
+    Array.isArray(entry.tokens) &&
+    entry.tokens.every((token) => typeof token === "string")
+  );
+}
+
+function addPath(
+  inverted: Map<string, Set<string>>,
+  df: Map<string, number>,
+  path: string,
+  tokens: Iterable<string>,
+): void {
+  for (const token of tokens) {
+    df.set(token, (df.get(token) ?? 0) + 1);
+    let paths = inverted.get(token);
+    if (!paths) {
+      paths = new Set();
+      inverted.set(token, paths);
+    }
+    paths.add(path);
+  }
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+const EMPTY: Set<string> = new Set();

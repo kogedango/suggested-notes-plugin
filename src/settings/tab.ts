@@ -40,8 +40,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         | "tagWeight"
         | "backlinkWeight"
         | "directLinkWeight"
+        | "unlinkedMentionWeight"
         | "folderWeight"
-        | "titleWeight",
+        | "contentWeight",
     ) => {
       new Setting(containerEl).setName(name).addText((c) =>
         c.setValue(String(this.plugin.settings[key])).onChange(async (v) => {
@@ -57,8 +58,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     weightSetting(t("weightTags"), "tagWeight");
     weightSetting(t("weightBacklinks"), "backlinkWeight");
     weightSetting(t("weightDirectLink"), "directLinkWeight");
+    weightSetting(t("weightUnlinkedMention"), "unlinkedMentionWeight");
     weightSetting(t("weightFolder"), "folderWeight");
-    weightSetting(t("weightTitle"), "titleWeight");
+    weightSetting(t("weightContent"), "contentWeight");
 
     containerEl.createEl("h3", { text: t("settingBodyTokenHeading") });
     containerEl.createEl("p", {
@@ -77,31 +79,20 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName(t("settingSegmenterName"))
-      .setDesc(t("settingSegmenterDesc"))
-      .addToggle((c) =>
+      .setName(t("settingCustomVocabularyName"))
+      .setDesc(t("settingCustomVocabularyDesc"))
+      .addTextArea((c) =>
         c
-          .setValue(this.plugin.settings.bodyTokenSegmenterEnabled)
-          .onChange(async (v) => {
-            this.plugin.settings.bodyTokenSegmenterEnabled = v;
+          .setValue(this.plugin.settings.customVocabulary.join("\n"))
+          .onChange(async (value) => {
+            this.plugin.settings.customVocabulary = parseListInput(
+              value,
+              false,
+            );
             await this.plugin.saveSettings();
-            if (this.plugin.settings.bodyTokenEnabled) {
-              await this.plugin.rebuildBodyIndex();
-            }
+            this.plugin.scheduleVocabularyApply();
           }),
       );
-
-    new Setting(containerEl).setName(t("settingBodyTokenWeight")).addText((c) =>
-      c
-        .setValue(String(this.plugin.settings.bodyTokenWeight))
-        .onChange(async (v) => {
-          const n = parseFloat(v);
-          if (!isNaN(n) && n >= 0) {
-            this.plugin.settings.bodyTokenWeight = n;
-            await save();
-          }
-        }),
-    );
 
     new Setting(containerEl)
       .setName(t("settingTopN"))
@@ -115,7 +106,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
               this.plugin.settings.bodyTokenTopN = n;
               await this.plugin.saveSettings();
               if (this.plugin.settings.bodyTokenEnabled) {
-                await this.plugin.rebuildBodyIndex();
+                await this.plugin.rerankBodyIndex();
               }
             }
           }),
@@ -185,7 +176,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         | "excludedFolders"
         | "excludedTags"
         | "excludedLinks"
-        | "excludedBodyTokens",
+        | "excludedContentTokens",
       splitCommas: boolean,
     ) => {
       new Setting(containerEl)
@@ -219,9 +210,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       false,
     );
     listSetting(
-      t("settingExcludedBodyTokens"),
-      t("descExcludedBodyTokens"),
-      "excludedBodyTokens",
+      t("settingExcludedContentTokens"),
+      t("descExcludedContentTokens"),
+      "excludedContentTokens",
       true,
     );
   }

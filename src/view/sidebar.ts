@@ -243,7 +243,7 @@ export class RelatedNotesView extends ItemView {
   }
 
   // Hover a row to get the note's title/path plus the full score breakdown,
-  // grouped by signal (tags / links / backlinks / body tokens). Suppressed
+  // grouped by signal (tags / links / backlinks / content words). Suppressed
   // while Cmd/Ctrl is held so it doesn't fight the modifier body preview.
   private attachInfoTooltip(el: HTMLElement, c: ScoredCandidate): void {
     el.addEventListener("mousemove", (e) => {
@@ -406,22 +406,17 @@ function renderReasons(el: HTMLElement, c: ScoredCandidate): void {
   if (c.reasons.linksToActive) {
     parts.push(t("reasonLinksToThisNote"));
   }
+  if (c.reasons.mentionsCandidateTitle) {
+    parts.push(t("reasonUnlinkedTitleMention"));
+  }
   if (c.reasons.sharedBacklinks.length) {
     parts.push(
       t("reasonSharedBacklinks", { count: c.reasons.sharedBacklinks.length }),
     );
   }
-  if (c.reasons.sharedBodyTokens.length) {
+  if (c.reasons.sharedContentTokens.length) {
     parts.push(
-      c.reasons.sharedBodyTokens
-        .slice(0, 4)
-        .map((tok) => `“${tok}”`)
-        .join(" "),
-    );
-  }
-  if (c.reasons.sharedTitleTokens.length) {
-    parts.push(
-      c.reasons.sharedTitleTokens
+      c.reasons.sharedContentTokens
         .slice(0, 4)
         .map((tok) => `“${tok}”`)
         .join(" "),
@@ -475,6 +470,13 @@ function buildInfoTip(
       values: [t("tipLinksHereNotBack")],
     });
   }
+  if (showReasons && c.reasons.mentionsCandidateTitle) {
+    sections.push({
+      icon: "text-search",
+      label: t("tipLabelUnlinkedTitleMention"),
+      values: [t("tipTitleAppearsAsPlainText")],
+    });
+  }
   if (showReasons && c.reasons.sharedBacklinks.length) {
     sections.push({
       icon: "links-coming-in",
@@ -482,18 +484,11 @@ function buildInfoTip(
       values: c.reasons.sharedBacklinks.map((l) => `[[${displayName(l)}]]`),
     });
   }
-  if (showReasons && c.reasons.sharedBodyTokens.length) {
+  if (showReasons && c.reasons.sharedContentTokens.length) {
     sections.push({
       icon: "text",
-      label: t("tipLabelSharedBodyWords"),
-      values: c.reasons.sharedBodyTokens.map((tok) => `“${tok}”`),
-    });
-  }
-  if (showReasons && c.reasons.sharedTitleTokens.length) {
-    sections.push({
-      icon: "file-text",
-      label: t("tipLabelSharedTitleWords"),
-      values: c.reasons.sharedTitleTokens.map((tok) => `“${tok}”`),
+      label: t("tipLabelSharedContentWords"),
+      values: c.reasons.sharedContentTokens.map((tok) => `“${tok}”`),
     });
   }
   if (sections.length) {

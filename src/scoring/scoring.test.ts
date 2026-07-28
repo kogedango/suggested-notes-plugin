@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { TokenCounter } from "../analysis/types";
 import type { BodyTokenIndex } from "../cache/bodyTokens";
 import { InvertedIndex } from "../cache/inverted";
 import { SnapshotStore } from "../cache/store";
@@ -26,12 +27,23 @@ function snap(
 
 // Body matching is off in DEFAULT_SETTINGS; these methods are never reached.
 const noBody = {
+  isBuilt: () => false,
   salientFor: () => new Set<string>(),
   filesWithToken: () => new Set<string>(),
+  notesWithTokenCount: () => 0,
   idf: () => 0,
 } as unknown as BodyTokenIndex;
 
 const NO_TOKENS: Set<string> = new Set();
+const words: TokenCounter = {
+  tokenize(text) {
+    const out = new Map<string, number>();
+    for (const word of text.toLowerCase().match(/[a-z一-龥ぁ-んァ-ヶー]+/g) ?? []) {
+      out.set(word, (out.get(word) ?? 0) + 1);
+    }
+    return out;
+  },
+};
 
 function engine(snaps: FileSnapshot[]): ScoringEngine {
   const store = new SnapshotStore();
@@ -42,8 +54,45 @@ function engine(snaps: FileSnapshot[]): ScoringEngine {
   // test fixture basenames below are distinct English words that never
   // collide, so it contributes nothing unless a test's own title-token
   // assertions rely on it deliberately (see the "title tokens" describe block).
-  const titles = new TitleTokenIndex(store);
-  return new ScoringEngine(store, inverted, noBody, titles);
+  const titles = new TitleTokenIndex(store, words);
+  for (const snapshot of store.all()) titles.add(snapshot.path);
+  return new ScoringEngine(store, inverted, noBody, titles, words);
+}
+
+function engineWithBody(
+  snaps: FileSnapshot[],
+  bodyTokens: Record<string, string[]>,
+): ScoringEngine {
+  const store = new SnapshotStore();
+  store.rebuildAll(snaps);
+  const inverted = new InvertedIndex(store);
+  inverted.rebuild();
+  const titles = new TitleTokenIndex(store, words);
+  for (const snapshot of store.all()) titles.add(snapshot.path);
+  const perPath = new Map(
+    Object.entries(bodyTokens).map(([path, tokens]) => [
+      path,
+      new Set(tokens),
+    ]),
+  );
+  const body = {
+    isBuilt: () => true,
+    salientFor: (path: string) => perPath.get(path) ?? new Set<string>(),
+    filesWithToken: (token: string) =>
+      new Set(
+        [...perPath]
+          .filter(([, tokens]) => tokens.has(token))
+          .map(([path]) => path),
+      ),
+    notesWithTokenCount: (token: string) => {
+      const paths = new Set(titles.filesWithToken(token));
+      for (const [path, tokens] of perPath) {
+        if (tokens.has(token)) paths.add(path);
+      }
+      return paths.size;
+    },
+  } as unknown as BodyTokenIndex;
+  return new ScoringEngine(store, inverted, body, titles, words);
 }
 
 function settings(overrides: Partial<PluginSettings> = {}): PluginSettings {
@@ -166,21 +215,33 @@ describe("ScoringEngine.score", () => {
     expect(results).toEqual([]);
   });
 
-  it("excluded body-token words neither generate candidates nor score", () => {
+  it("excluded content words neither generate candidates nor score", () => {
     // A body mock where both notes share the salient token コメント.
     const body = {
+      isBuilt: () => true,
       salientFor: (p: string) =>
         p === "match.md" ? new Set(["コメント"]) : new Set<string>(),
       filesWithToken: (t: string) =>
-        t === "コメント" ? new Set(["match.md"]) : new Set<string>(),
+        t === "コメント"
+          ? new Set(["active.md", "match.md"])
+          : new Set<string>(),
+      notesWithTokenCount: (t: string) => (t === "コメント" ? 2 : 0),
       idf: () => 1,
     } as unknown as BodyTokenIndex;
     const store = new SnapshotStore();
-    store.rebuildAll([snap("active.md"), snap("match.md")]);
+    store.rebuildAll([
+      snap("active.md"),
+      snap("match.md"),
+      snap("filler1.md"),
+      snap("filler2.md"),
+      snap("filler3.md"),
+      snap("filler4.md"),
+    ]);
     const inverted = new InvertedIndex(store);
     inverted.rebuild();
-    const titles = new TitleTokenIndex(store);
-    const e = new ScoringEngine(store, inverted, body, titles);
+    const titles = new TitleTokenIndex(store, words);
+    for (const snapshot of store.all()) titles.add(snapshot.path);
+    const e = new ScoringEngine(store, inverted, body, titles, words);
 
     const active = new Set(["コメント"]);
     // Without exclusion the shared token surfaces match.md.
@@ -189,7 +250,7 @@ describe("ScoringEngine.score", () => {
     // Excluding the word drops the only signal -> no candidate.
     const off = e.score(
       "active.md",
-      settings({ bodyTokenEnabled: true, excludedBodyTokens: ["コメント"] }),
+      settings({ bodyTokenEnabled: true, excludedContentTokens: ["コメント"] }),
       active,
     );
     expect(off.results).toEqual([]);
@@ -204,6 +265,53 @@ describe("ScoringEngine.score", () => {
     const { results } = e.score("active.md", settings(), NO_TOKENS);
     expect(results.map((r) => r.path)).toEqual(["linksBack.md"]);
     expect(results[0].reasons.linksToActive).toBe(true);
+  });
+
+  it("surfaces a candidate whose full title is mentioned as plain text", () => {
+    const e = engine([
+      snap("active.md"),
+      snap("Target Note.md"),
+      snap("filler.md"),
+    ]);
+    const { results } = e.score(
+      "active.md",
+      settings(),
+      NO_TOKENS,
+      "Target Noteについて考える。",
+    );
+    expect(results.map((result) => result.path)).toEqual(["Target Note.md"]);
+    expect(results[0].reasons.mentionsCandidateTitle).toBe(true);
+    expect(results[0].rawScore).toBe(DEFAULT_SETTINGS.unlinkedMentionWeight);
+  });
+
+  it("does not score an existing link as an unlinked title mention", () => {
+    const e = engine([
+      snap("active.md", { outlinks: ["Target Note.md"] }),
+      snap("Target Note.md"),
+      snap("filler.md"),
+    ]);
+    const { results } = e.score(
+      "active.md",
+      settings(),
+      NO_TOKENS,
+      "[[Target Note]] Target Note",
+    );
+    expect(results).toEqual([]);
+  });
+
+  it("disables title-mention discovery when its weight is 0", () => {
+    const e = engine([
+      snap("active.md"),
+      snap("Target Note.md"),
+      snap("filler.md"),
+    ]);
+    const { results } = e.score(
+      "active.md",
+      settings({ unlinkedMentionWeight: 0 }),
+      NO_TOKENS,
+      "Target Note",
+    );
+    expect(results).toEqual([]);
   });
 
   it("does not flag linksToActive when the active note doesn't have that backlink", () => {
@@ -272,9 +380,9 @@ describe("ScoringEngine.score", () => {
   });
 });
 
-describe("ScoringEngine.score — title tokens (plan C)", () => {
-  it("discovers a candidate purely through a shared title token", () => {
-    // "topic" is shared by exactly 2 of 10 notes (2/10 = 20%, not > 20%), so
+describe("ScoringEngine.score — content tokens", () => {
+  it("treats title words as content and discovers a title-only match", () => {
+    // "topic" is shared by exactly 2 of 10 notes, so
     // the df-ratio guard does not block it from generating a candidate.
     const filler = Array.from({ length: 8 }, (_, i) => snap(`Filler${i}.md`));
     const e = engine([
@@ -285,22 +393,24 @@ describe("ScoringEngine.score — title tokens (plan C)", () => {
     const { results } = e.score("Active Topic.md", settings(), NO_TOKENS);
     const related = results.find((r) => r.path === "Related Topic.md");
     expect(related).toBeDefined();
-    expect(related!.reasons.sharedTitleTokens).toEqual(["topic"]);
+    expect(related!.reasons.sharedContentTokens).toEqual(["topic"]);
     expect(related!.rawScore).toBeGreaterThan(0);
   });
 
-  it("guards candidate EXPANSION for an overly common title token, but still scores it once the candidate is in via another signal", () => {
-    // "notes" is carried by 3 of 11 notes (3/11 ≈ 27% > 20%): too common to
+  it("guards candidate expansion for an overly common content token, but still scores an independently discovered candidate", () => {
+    // "notes" is carried by 5 of 11 notes (5/11 ≈ 45% > 40%): too common to
     // fan out on. "Notes Only" shares nothing else with the active note, so
     // it must never become a candidate. "Notes ViaTag" shares tag x (its own
     // route into the candidate set) AND the word "notes" — computeReasons/
     // rawScore aren't gated by the expansion guard, so it should score above
     // "Plain Baseline", which shares only the tag.
-    const filler = Array.from({ length: 7 }, (_, i) => snap(`Filler${i}.md`));
+    const filler = Array.from({ length: 5 }, (_, i) => snap(`Filler${i}.md`));
     const e = engine([
       snap("Notes Active.md", { tags: ["x"] }),
       snap("Notes Only.md"),
       snap("Notes ViaTag.md", { tags: ["x"] }),
+      snap("Notes Extra One.md"),
+      snap("Notes Extra Two.md"),
       snap("Plain Baseline.md", { tags: ["x"] }),
       ...filler,
     ]);
@@ -312,12 +422,77 @@ describe("ScoringEngine.score — title tokens (plan C)", () => {
     const baseline = results.find((r) => r.path === "Plain Baseline.md");
     expect(viaTag).toBeDefined();
     expect(baseline).toBeDefined();
-    expect(viaTag!.reasons.sharedTitleTokens).toEqual(["notes"]);
-    expect(baseline!.reasons.sharedTitleTokens).toEqual([]);
+    expect(viaTag!.reasons.sharedContentTokens).toEqual(["notes"]);
+    expect(baseline!.reasons.sharedContentTokens).toEqual([]);
     expect(viaTag!.rawScore).toBeGreaterThan(baseline!.rawScore);
   });
 
-  it("titleWeight of 0 removes the title-token score contribution", () => {
+  it("orders shared content reasons by descending IDF", () => {
+    const e = engine([
+      snap("Common Rare.md"),
+      snap("Common Rare Candidate.md"),
+      snap("Common Extra One.md"),
+      snap("Common Extra Two.md"),
+      snap("Common Extra Three.md"),
+      ...Array.from({ length: 5 }, (_, i) => snap(`Filler${i}.md`)),
+    ]);
+    const { results } = e.score("Common Rare.md", settings(), NO_TOKENS);
+    const candidate = results.find(
+      (result) => result.path === "Common Rare Candidate.md",
+    );
+
+    expect(candidate?.reasons.sharedContentTokens).toEqual([
+      "rare",
+      "common",
+    ]);
+  });
+
+  it("scores compound and component keys without containment suppression", () => {
+    const compoundAnalyzer: TokenCounter = {
+      tokenize(text) {
+        if (!text.includes("Compound")) return words.tokenize(text);
+        return new Map([
+          ["機械", 1],
+          ["学習", 1],
+          ["機械学習", 1],
+        ]);
+      },
+    };
+    const store = new SnapshotStore();
+    store.rebuildAll([
+      snap("Compound Active.md"),
+      snap("Compound Related.md"),
+      ...Array.from({ length: 8 }, (_, i) => snap(`Filler${i}.md`)),
+    ]);
+    const inverted = new InvertedIndex(store);
+    inverted.rebuild();
+    const titles = new TitleTokenIndex(store, compoundAnalyzer);
+    for (const snapshot of store.all()) titles.add(snapshot.path);
+    const e = new ScoringEngine(
+      store,
+      inverted,
+      noBody,
+      titles,
+      compoundAnalyzer,
+    );
+
+    const related = e.score(
+      "Compound Active.md",
+      settings(),
+      NO_TOKENS,
+    ).results.find((result) => result.path === "Compound Related.md");
+    const oneTokenContribution =
+      DEFAULT_SETTINGS.contentWeight * Math.log(10 / 2);
+
+    expect(related?.reasons.sharedContentTokens).toEqual([
+      "機械",
+      "学習",
+      "機械学習",
+    ]);
+    expect(related?.rawScore).toBeCloseTo(3 * oneTokenContribution);
+  });
+
+  it("contentWeight of 0 removes lexical score contribution", () => {
     const filler = Array.from({ length: 8 }, (_, i) => snap(`Filler${i}.md`));
     const e = engine([
       snap("Active Topic.md"),
@@ -326,12 +501,97 @@ describe("ScoringEngine.score — title tokens (plan C)", () => {
     ]);
     const { results } = e.score(
       "Active Topic.md",
-      settings({ titleWeight: 0 }),
+      settings({ contentWeight: 0 }),
       NO_TOKENS,
     );
-    // Candidate generation still happens (df-ratio guard is independent of
-    // titleWeight), but with weight 0 there is no score to show for it.
     expect(results.find((r) => r.path === "Related Topic.md")).toBeUndefined();
+  });
+
+  it("applies content exclusions to title words in lightweight mode", () => {
+    const filler = Array.from({ length: 8 }, (_, i) => snap(`Filler${i}.md`));
+    const e = engine([
+      snap("Active Memo.md"),
+      snap("Related Memo.md"),
+      ...filler,
+    ]);
+    const { results } = e.score(
+      "Active Memo.md",
+      settings({
+        bodyTokenEnabled: false,
+        excludedContentTokens: ["memo"],
+      }),
+      NO_TOKENS,
+    );
+    expect(results).toEqual([]);
+  });
+
+  it("uses restored title indexes before the analyzer is ready", () => {
+    const snaps = [
+      snap("Active Topic.md"),
+      snap("Related Topic.md"),
+      ...Array.from({ length: 8 }, (_, i) => snap(`Filler${i}.md`)),
+    ];
+    const store = new SnapshotStore();
+    store.rebuildAll(snaps);
+    const inverted = new InvertedIndex(store);
+    inverted.rebuild();
+    const titles = new TitleTokenIndex(store, words);
+    for (const snapshot of store.all()) titles.add(snapshot.path);
+    const scoring = new ScoringEngine(store, inverted);
+    scoring.attachCachedMorphology(noBody, titles);
+
+    expect(
+      scoring
+        .score("Active Topic.md", settings(), NO_TOKENS)
+        .results.map((result) => result.path),
+    ).toContain("Related Topic.md");
+    expect(
+      scoring.score(
+        "Active Topic.md",
+        settings({ excludedContentTokens: ["topic"] }),
+        NO_TOKENS,
+      ).results,
+    ).toEqual([]);
+  });
+
+  it("matches an active title word against a candidate body word", () => {
+    const e = engineWithBody(
+      [
+        snap("Alpha.md"),
+        snap("Candidate.md"),
+        snap("FillerOne.md"),
+        snap("FillerTwo.md"),
+        snap("FillerThree.md"),
+        snap("FillerFour.md"),
+      ],
+      { "Candidate.md": ["alpha"] },
+    );
+    const { results } = e.score("Alpha.md", settings(), NO_TOKENS);
+    expect(results.map((result) => result.path)).toEqual(["Candidate.md"]);
+    expect(results[0].reasons.sharedContentTokens).toEqual(["alpha"]);
+  });
+
+  it("counts a word only once when it appears in both title and body", () => {
+    const e = engineWithBody(
+      [
+        snap("Alpha.md"),
+        snap("Alpha Candidate.md"),
+        snap("FillerOne.md"),
+        snap("FillerTwo.md"),
+        snap("FillerThree.md"),
+        snap("FillerFour.md"),
+      ],
+      {
+        "Alpha.md": ["alpha"],
+        "Alpha Candidate.md": ["alpha"],
+      },
+    );
+    const { results } = e.score(
+      "Alpha.md",
+      settings(),
+      new Set(["alpha"]),
+    );
+    expect(results[0].reasons.sharedContentTokens).toEqual(["alpha"]);
   });
 });
 

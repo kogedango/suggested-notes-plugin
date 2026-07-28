@@ -27,7 +27,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          assets=(main.js manifest.json)
+          # main.js carries every notice in its banner; these are attached so
+          # they are readable without opening a 27 MB minified file.
+          assets=(
+            main.js
+            manifest.json
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+            node_modules/kuromoji/LICENSE-2.0.txt
+            node_modules/kuromoji/NOTICE.md
+          )
           if [ -f styles.css ]; then
             assets+=(styles.css)
           fi

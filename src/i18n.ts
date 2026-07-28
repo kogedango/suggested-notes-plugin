@@ -18,43 +18,41 @@ const en = {
   settingWeightsHeading: "Weights",
   settingWeightsDesc:
     "Each shared signal contributes weight × IDF to the score. " +
-    "'Links to this note' is the exception — a flat weight (no IDF) for a single " +
+    "'Links to this note' and 'Unlinked title mention' use flat weights (no IDF). " +
+    "The former is an " +
     "asymmetric link: the candidate links here, but this note doesn't link back yet. " +
     "The total is then divided by log(1 + outlinkCount) of the candidate to suppress MOC / index notes. " +
     "Same folder defaults to 0 — folder co-location often means 'filed together', not 'topically related'. " +
-    "Shared title words is on by default and metadata-only (filenames, not bodies) — " +
-    "set it to 0 to turn it off.",
+    "Title words and salient body words form one content-word set; the same word contributes only once.",
   weightOutlinks: "Shared outlinks",
   weightTags: "Shared tags",
   weightBacklinks: "Shared backlinks",
   weightDirectLink: "Links to this note",
+  weightUnlinkedMention: "Unlinked title mention",
   weightFolder: "Same folder",
-  weightTitle: "Shared title words",
+  weightContent: "Shared content words",
 
   // Settings tab — Body-token matching
   settingBodyTokenHeading: "Body-token matching",
   settingBodyTokenDesc:
-    "Optional. Picks up notes that share rare vocabulary even without explicit tags or links. " +
-    "Off by default: enabling reads every .md file once (async, ~10–20s for 5,000 notes) to build the index. " +
+    "On by default. Title words and salient body words are matched as one content signal. " +
+    "Disabling it avoids a vault-wide body index; the active note may still be read for unlinked title mentions. " +
+    "The first build reads every .md file in bounded asynchronous batches; later starts restore the saved index and read only changed notes. " +
     "The active note is always re-read live, and an edited note's index entry updates as soon as the edit settles (~2s). " +
-    "Whole-vault statistics rebuild lazily (~1 min after edits settle), " +
-    "or immediately via the Rebuild button below / 'Rebuild body-token index' command.",
+    "Corpus statistics update from that one note without re-reading the rest of the vault. " +
+    "The Rebuild button below / 'Rebuild body-token index' command forces a full repair pass.",
   settingBodyTokenEnable: "Enable body-token matching",
-  settingSegmenterName: "Japanese word segmentation (on by default)",
-  settingSegmenterDesc:
-    "Splits Japanese text into words with TinySegmenter (offline, no dictionary) " +
-    "so okurigana-mixed words like 打ち合わせ・読み込み and hiragana words like " +
-    "ひらめき also count as shared vocabulary — without this, such words are " +
-    "invisible to body-token matching. On by default; turn it off for vaults " +
-    "with little Japanese text to make indexing faster. Changing this rebuilds the index.",
-  settingBodyTokenWeight: "Body-token weight",
+  settingCustomVocabularyName: "Vault-specific vocabulary",
+  settingCustomVocabularyDesc:
+    "One term or alias group per line. Separate equivalent spellings with | " +
+    "(for example, ツェッテルカステン|Zettelkasten); the first spelling is shown as the canonical term. " +
+    "Every spelling is protected as one token before analysis, and the longest match wins.",
   settingTopN: "Salient tokens per note",
-  descRebuildsIndex: "Changing this rebuilds the index.",
+  descRebuildsIndex: "Changing this re-ranks the saved index without re-reading notes.",
   settingRebuildNow: "Rebuild index now",
   descRebuildNow:
     "Re-reads every note and rebuilds the whole-vault statistics. " +
-    "Rarely needed: edited notes update on save, and statistics refresh " +
-    "automatically ~1 min after edits settle.",
+    "Rarely needed: edited notes and corpus statistics update incrementally on save.",
   buttonRebuild: "Rebuild",
   noticeBodyTokenDisabled: "Body-token matching is disabled.",
 
@@ -83,12 +81,11 @@ const en = {
   settingExcludedLinks: "Excluded links",
   descExcludedLinks:
     "One note basename per line (e.g. 'Linux', not '[[Linux]]').",
-  settingExcludedBodyTokens: "Excluded body-token words",
-  descExcludedBodyTokens:
+  settingExcludedContentTokens: "Excluded content words",
+  descExcludedContentTokens:
     "One word per line or comma-separated. Recurring heading words you don't " +
-    "want to count as a shared body signal (e.g. コメント, 結果, メモ). " +
-    "Only used when body-token matching is on; takes effect immediately, " +
-    "no rebuild needed.",
+    "want to count as shared content (e.g. コメント, 結果, メモ). " +
+    "Applies to both titles and bodies immediately; no rebuild needed.",
 
   // Sidebar — status placeholders
   statusIndexing: "Indexing vault…",
@@ -106,20 +103,23 @@ const en = {
 
   // Sidebar — inline reasons line
   reasonLinksToThisNote: "links to this note",
+  reasonUnlinkedTitleMention: "title mentioned",
   reasonSharedBacklinks: "+{count} shared backlink(s)",
 
   // Sidebar — hover info tooltip
   tipLabelSharedTags: "Shared tags",
   tipLabelSharedLinks: "Shared links",
   tipLabelLinksToThisNote: "Links to this note",
+  tipLabelUnlinkedTitleMention: "Unlinked title mention",
   tipLabelSharedBacklinks: "Shared backlinks",
-  tipLabelSharedBodyWords: "Shared body words",
-  tipLabelSharedTitleWords: "Shared title words",
+  tipLabelSharedContentWords: "Shared content words",
   tipLinksHereNotBack: "Links here, not linked back yet",
+  tipTitleAppearsAsPlainText: "Full title appears as plain text",
 
   // main.ts notices
   noticeBodyTokenRebuilt: "Body-token index rebuilt.",
   noticeBodyTokenRebuildFailed: "Body-token index rebuild failed: {message}",
+  noticeMorphologyFailed: "Language analyzers failed to initialize: {message}",
   noticeActiveNoteChanged: "Active note has changed.",
   // Deliberately left out of `ja` below: the format is just "+#tag" with no
   // English words in it, so the English-fallback template already reads
@@ -138,47 +138,48 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   settingWeightsHeading: "重み",
   settingWeightsDesc:
     "共有されている各シグナルは、重み × IDF としてスコアに加算されます。" +
-    "「このノートへのリンク」は例外で、候補ノートがこのノートにリンクしているのに" +
+    "「このノートへのリンク」と「タイトルの未リンク言及」は例外で、IDFなしの固定値です。" +
+    "前者は候補ノートがこのノートにリンクしているのに" +
     "このノートからはまだリンクしていない、という非対称な片方向リンク1件分に対して" +
-    "IDFなしの固定値を加えます。合計は候補ノートの log(1 + 発リンク数) で割られ、" +
+    "加点します。合計は候補ノートの log(1 + 発リンク数) で割られ、" +
     "MOCやインデックスノートが上位を占めすぎないようにします。" +
     "「同じフォルダ」の初期値は0です。フォルダが同じというだけでは" +
     "「まとめて置いてあるだけ」であって「内容が関連している」とは限らないためです。" +
-    "「共有するタイトル語」は初期状態で有効で、メタデータのみ(本文ではなく" +
-    "ファイル名)を使います。無効にするには0に設定してください。",
+    "タイトル語と本文の重要語は一つの内容語集合として扱われ、同じ語は1回だけ加点されます。",
   weightOutlinks: "共有する発リンク",
   weightTags: "共有するタグ",
   weightBacklinks: "共有する被リンク",
   weightDirectLink: "このノートへのリンク",
+  weightUnlinkedMention: "タイトルの未リンク言及",
   weightFolder: "同じフォルダ",
-  weightTitle: "共有するタイトル語",
+  weightContent: "共有する内容語",
 
   settingBodyTokenHeading: "本文トークンマッチング",
   settingBodyTokenDesc:
-    "任意機能です。タグやリンクを共有していなくても、珍しい語彙を共有しているノートを" +
-    "見つけ出します。初期状態ではオフです。有効にすると、インデックス作成のために" +
-    "すべての .md ファイルを一度読み込みます(非同期処理、ノート5,000件でおよそ" +
-    "10〜20秒)。アクティブなノートは常にその場で最新の内容を読み直し、編集した" +
+    "初期状態で有効です。タイトル語と本文の重要語を一つの内容シグナルとして照合します。" +
+    "無効にするとVault全体の本文索引を作らない軽量モードになりますが、タイトルの未リンク" +
+    "言及を探すためにアクティブノートだけは読むことがあります。有効にすると、" +
+    "タグやリンクを共有していなくても珍しい語彙を共有しているノートを見つけ出し、" +
+    "初回のインデックス作成では、すべての .md ファイルを一定件数ずつ非同期に読み込みます。" +
+    "次回以降は保存したインデックスを復元し、変更されたノートだけを読み直します。所要時間は端末と" +
+    "Vaultによって異なります。アクティブなノートは常にその場で最新の内容を読み直し、編集した" +
     "ノートのインデックス項目は編集が落ち着いてから(約2秒後)すぐに更新されます。" +
-    "Vault全体の統計は編集が落ち着いてから約1分後に遅延再構築されるほか、下の" +
-    "「再構築」ボタンや「本文トークンインデックスを再構築」コマンドで即座に" +
-    "再構築することもできます。",
+    "Vault全体の統計も、他のノートを読み直さずにその1件の差分から更新されます。下の" +
+    "「再構築」ボタンや「本文トークンインデックスを再構築」コマンドは、全件を読み直す" +
+    "修復処理を明示的に実行します。",
   settingBodyTokenEnable: "本文トークンマッチングを有効化",
-  settingSegmenterName: "日本語分かち書き(デフォルトで有効)",
-  settingSegmenterDesc:
-    "TinySegmenter(オフライン・辞書不要)を使って日本語のテキストを単語に分割します。" +
-    "これにより「打ち合わせ」「読み込み」のような送り仮名を含む単語や、" +
-    "「ひらめき」のようなひらがなの単語も共有語彙として認識されるようになります。" +
-    "これを有効にしないと、こうした単語は本文トークンマッチングから見えないままです。" +
-    "デフォルトで有効です。日本語をあまり含まないVaultでは、これをオフにすると" +
-    "インデックス作成が速くなります。この設定を変更するとインデックスが再構築されます。",
-  settingBodyTokenWeight: "本文トークンの重み",
+  settingCustomVocabularyName: "Vault固有語",
+  settingCustomVocabularyDesc:
+    "1行につき1語または1グループを登録します。同じ語として扱う表記は | で区切ります" +
+    "（例: ツェッテルカステン|Zettelkasten）。先頭表記を代表語として表示し、すべての表記を" +
+    "日英解析の前に1トークンとして保護します。同じ位置では最長一致を優先します。",
   settingTopN: "ノートごとの重要トークン数",
-  descRebuildsIndex: "この設定を変更するとインデックスが再構築されます。",
+  descRebuildsIndex:
+    "この設定を変更すると、ノートを読み直さずに保存済みインデックスを再順位付けします。",
   settingRebuildNow: "今すぐインデックスを再構築",
   descRebuildNow:
     "すべてのノートを読み直し、Vault全体の統計を再構築します。編集したノートは" +
-    "保存時に更新され、統計も編集が落ち着いてから約1分後に自動的に更新されるため、" +
+    "保存時に差分更新され、Vault全体の統計も同時に更新されるため、" +
     "通常は使う必要はありません。",
   buttonRebuild: "再構築",
   noticeBodyTokenDisabled: "本文トークンマッチングは無効になっています。",
@@ -210,12 +211,11 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   settingExcludedLinks: "除外リンク",
   descExcludedLinks:
     "1行につき1つ、ノート名を入力します(例:「[[Linux]]」ではなく「Linux」)。",
-  settingExcludedBodyTokens: "除外する本文トークン",
-  descExcludedBodyTokens:
+  settingExcludedContentTokens: "除外する内容語",
+  descExcludedContentTokens:
     "1行につき1つ、またはカンマ区切りで単語を入力します。「コメント」「結果」" +
-    "「メモ」のように、共有の本文シグナルとしてカウントしたくない見出しの常連語" +
-    "などに使います。本文トークンマッチングが有効なときのみ使用され、再構築なしで" +
-    "すぐに反映されます。",
+    "「メモ」のように、共有内容としてカウントしたくない見出しやタイトルの常連語" +
+    "などに使います。タイトルと本文の両方へ、再構築なしですぐに反映されます。",
 
   statusIndexing: "Vaultをインデックス中…",
   statusNoActive: "ノートを開くと関連ノートが表示されます。",
@@ -229,19 +229,22 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   suggestAddTag: "#{tag} を追加({count}件のノート)",
 
   reasonLinksToThisNote: "このノートへリンク",
+  reasonUnlinkedTitleMention: "タイトルを本文で言及",
   reasonSharedBacklinks: "被リンクを{count}件共有",
 
   tipLabelSharedTags: "共有タグ",
   tipLabelSharedLinks: "共有リンク",
   tipLabelLinksToThisNote: "このノートへのリンク",
+  tipLabelUnlinkedTitleMention: "タイトルの未リンク言及",
   tipLabelSharedBacklinks: "共有被リンク",
-  tipLabelSharedBodyWords: "共有本文ワード",
-  tipLabelSharedTitleWords: "共有タイトルワード",
+  tipLabelSharedContentWords: "共有内容語",
   tipLinksHereNotBack: "リンクされていますが、まだリンクを返していません",
+  tipTitleAppearsAsPlainText: "候補タイトル全体が通常テキストとして現れます",
 
   noticeBodyTokenRebuilt: "本文トークンインデックスを再構築しました。",
   noticeBodyTokenRebuildFailed:
     "本文トークンインデックスの再構築に失敗しました: {message}",
+  noticeMorphologyFailed: "言語解析器の初期化に失敗しました: {message}",
   noticeActiveNoteChanged: "アクティブなノートが変わりました。",
   noticeLinkAdded: "{name} へのリンクを追加しました",
 };

@@ -1,18 +1,15 @@
-import { tokenize } from "./tokenize";
+import type { TokenCounter } from "../analysis/types";
 
-// User-entered body-token stopwords (recurring heading words like コメント /
-// 結果) are run through the same tokenizer the note bodies use, so their
-// canonical token forms line up with what lands in salient sets — width/case
-// folding and katakana long-vowel normalization included. `segment` must match
-// the corpus flag so a word tokenizes to the same form on both sides.
-export function normalizeBodyTokenSet(
+// User-entered content-token exclusions are run through the same analyzer as
+// titles and bodies, so their canonical forms line up with both fields.
+export function normalizeContentTokenSet(
   list: string[],
-  segment: boolean,
+  analyzer: TokenCounter,
 ): Set<string> {
   const out = new Set<string>();
   for (const raw of list) {
     if (!raw.trim()) continue;
-    for (const t of tokenize(raw, segment).keys()) out.add(t);
+    for (const t of analyzer.tokenize(raw).keys()) out.add(t);
   }
   return out;
 }

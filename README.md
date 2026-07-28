@@ -1,8 +1,8 @@
 # Suggested Notes
 
-An [Obsidian](https://obsidian.md) sidebar plugin that shows notes related to the active note. **Designed first for Japanese-language vaults** — the tokenizer is built for text without word boundaries — and works just as well for English notes.
+An [Obsidian](https://obsidian.md) sidebar plugin that shows notes related to the active note. Japanese and English are analyzed together, including mixed-language study and technical notes.
 
-Related notes are picked by a weighted score over shared tags, links, backlinks, filename words, and (optionally) body vocabulary. Everything runs locally: no AI, no network, no background process.
+Related notes are picked by a weighted score over shared tags, links, backlinks, and content words from titles and bodies. Everything runs locally: no AI, no network, and no always-on background process.
 
 ![Suggested Notes sidebar showing related notes and suggested tags for the active note](docs/screenshot.png)
 
@@ -10,22 +10,36 @@ Related notes are picked by a weighted score over shared tags, links, backlinks,
 
 ## Highlights
 
-- **Japanese-first tokenizer** — extracts vocabulary matches from unsegmented Japanese bodies and filenames ([details](#japanese-language-support))
-- **Metadata first** — by default no note bodies are read; tags, links, and filenames are enough to run. Body matching is opt-in
+- **Bilingual morphology** — Kuromoji/IPADIC and wink-nlp extract content words and normalize inflections in mixed Japanese/English text ([details](#japanese-and-english-morphology))
+- **Content-aware by default** — title words and salient body words form one deduplicated content signal. Disable body matching to avoid a vault-wide body index
 - **Offline, no AI** — no embeddings, no external APIs
-- **Lightweight** — candidates are narrowed via inverted indexes, never a full-vault scan. Mobile supported
+- **No full-vault scan per query** — inverted indexes narrow candidates before scoring. Mobile is [being verified for the v0.6.0 prerelease](docs/mobile-testing.md)
 - **Never writes to your notes** — plugin state is not stored in frontmatter or tags. Notes change only when you explicitly press the append-link / add-tag buttons
 - **UI in Japanese and English** — follows Obsidian's language setting
 
-## Japanese-language support
+## Japanese and English morphology
 
-Japanese text has no spaces between words, so naive word splitting cannot find shared vocabulary. This plugin handles it as follows:
+Text is routed by span rather than classifying an entire note as one language.
+Kuromoji/IPADIC handles Japanese; wink-nlp's browser model handles English.
+Both retain nouns, main verbs, adjectives, and adverbs, then normalize verbs and
+other inflections to dictionary forms (`使った → 使う`, `uses → use`,
+`plugins → plugin`). Grammatical words are removed by part of speech rather
+than a bundled stopword list.
 
-- Kanji runs are tokenized as both the full run and its 2-character pairs, and **only pairs that exist as standalone words somewhere in the vault are kept** — so 機械学習 matches 学習, while morpheme-straddling fragments like 本語 (from 日本語) are dropped
-- Katakana compounds (リチウムバッテリー) get the same treatment for sub-words (バッテリ), and trailing prolonged-mark variants (サーバー / サーバ) are normalized
-- Okurigana-mixed words (打ち合わせ) and hiragana words (ひらめき) are extracted by the bundled TinySegmenter (~25KB, offline, dictionary-free), on by default
-- Full-width / half-width variants are folded by NFKC normalization
-- The built-in Japanese stopword list contains only words vetted against public lists (SlothLib, stopwords-iso) and grammatical categories ([policy](#built-in-stopwords))
+Markdown structure, code, URLs, links, tags, punctuation, and numbers do not
+enter the vocabulary. NFKC normalization is shared by titles, bodies, and
+user exclusions. Vault-specific names that a general dictionary splits can be
+registered explicitly; exact longest matches are protected as one token.
+ASCII terms require identifier boundaries, so a term such as `AI` does not
+match inside `RAIL`. Equivalent spellings can be grouped with `|`, for example
+`ツェッテルカステン|Zettelkasten`; every spelling then emits the first
+spelling as one canonical content word. ASCII aliases are case-insensitive.
+
+Contiguous Japanese noun runs retain both components and valid compounds.
+Adjacent identifiers can join without whitespace, so topic terms such as
+`機械学習`, `自然言語処理`, and `API設計` remain indexable. Symbol-bearing
+custom terms such as `C++` are protected before symbol removal when registered
+with the same symbol spelling.
 
 ## Install
 
@@ -41,7 +55,10 @@ BRAT auto-updates the plugin when a new version is released.
 
 ### Manual
 
-1. Download `main.js`, `manifest.json` (and `styles.css` if present) from the latest [Release](https://github.com/kogedango/suggested-notes-plugin/releases).
+1. Download `main.js`, `manifest.json` (and `styles.css` if present) from the
+   latest [Release](https://github.com/kogedango/suggested-notes-plugin/releases).
+   License notices are embedded in `main.js`; readable copies are also attached
+   as `LICENSE`, `THIRD_PARTY_NOTICES.md`, `LICENSE-2.0.txt`, and `NOTICE.md`.
 2. Place them in `<vault>/.obsidian/plugins/suggested-notes/`.
 3. Reload Obsidian and enable "Suggested Notes" under Community plugins.
 
@@ -54,26 +71,51 @@ For each active note, candidates are narrowed via inverted indexes (`tag → fil
 | Shared outlinks | 8 | per-link IDF |
 | Shared tags | 5 | per-tag IDF |
 | Shared backlinks | 4 | source specificity (co-citation from a note with few outlinks counts as stronger evidence) |
-| Shared title words | 3 | per-token IDF |
-| Shared body tokens | 1.5 | per-token IDF |
+| Direct link to the active note | 6 | flat; asymmetric link from candidate to active note |
+| Unlinked title mention | 8 | flat; full candidate title appears in the active body |
+| Shared content words | 1.5 | per-token IDF |
+| Same folder | 0 | flat; expands candidates only when greater than zero |
 
-The raw score is divided by the candidate's `log(1 + outlink count)` to keep MOC / index notes from dominating. Displayed scores are normalized per query (top match = 100).
+The raw score is divided by the candidate's `max(1, log(1 + outlink count))` to keep MOC / index notes from dominating. Displayed scores are normalized per query (top match = 100).
 
 Folder weight defaults to 0: same-folder notes are often close simply because you put them there, and surfacing them crowds out genuinely useful suggestions (configurable).
 
-### Title-word matching
+### Content-word matching
 
-**Metadata-only, on by default.** Reads filenames only, never bodies. Notes whose filenames share a word ("Machine Learning Basics" / "Machine Learning Advanced") get IDF-weighted credit. It uses the same tokenizer as body matching but never the segmenter, so hiragana-only titles are a known gap. To keep generic words like "notes" or 日記 from fanning out, a title word carried by more than 20% of the vault is not used to discover new candidates (it still scores candidates found via other signals). Set the weight to 0 to disable.
-
-### Body-token matching
-
-**Optional, off by default.** Picks up notes that share rare vocabulary even without explicit tags or links. This is the only feature that reads note bodies.
+**On by default.** A note's content-word set is the union of its title words
+and salient body words. Title words are always retained rather than competing
+for the body top-N, and a word present in both fields contributes only once.
+This lets an active title match a candidate body (and vice versa) without
+treating shared title words as a separate signal.
 
 - Strips frontmatter, code blocks, wikilinks, hashtags, and URLs before tokenizing
 - Keeps the top-N tokens per note by `log(1+TF) × IDF` (default 40) and scores each shared token
-- Tokens appearing in more than 40% of the vault are auto-excluded
+- Tokens appearing in more than 40% of the vault are not used to expand the candidate set
 
-Enabling it reads every `.md` once to build the index (~10–20s for 5,000 notes, async, non-blocking). After that, the active note is re-read on every switch (your latest edits count immediately), an edited note's entry updates once the edit settles (~2s), and the vault-wide vocabulary statistics rebuild lazily about a minute after edits — or immediately via the Rebuild button / command.
+The first build analyzes titles and reads every `.md` in bounded asynchronous
+batches. Later starts restore the persisted morphology index first and analyze
+only new or changed notes. The active note is still re-read on every switch,
+and an edited note plus the corpus statistics update incrementally once the
+edit settles. Only notes affected by a changed token's document frequency are
+reranked, and consecutive cache writes are coalesced. The Rebuild button /
+command forces a full repair pass. Disable
+body matching for a lightweight mode that does not build a vault-wide body
+index.
+
+### Unlinked title mentions
+
+The active note's body is checked for an exact plain-text occurrence of a
+candidate's full filename. This is a separate structural signal rather than
+another word-overlap score, and it can discover a candidate on its own.
+
+- Existing wikilinks and Markdown links do not count
+- Frontmatter, code, URLs, tags, and image links do not count
+- NFKC-normalized matching is case-insensitive for English
+- One-character titles and ambiguous duplicate basenames are skipped
+- When titles overlap at the same position, the longest title wins
+- Only the active body is read; no vault-wide body index is needed
+
+Set the weight to 0 to disable active-body mention scanning.
 
 ## Features
 
@@ -81,7 +123,7 @@ Enabling it reads every `.md` once to build the index (~10–20s for 5,000 notes
 - Hover a row for the score breakdown; Cmd/Ctrl-hover for the note preview
 - Per-row **append-link button** (appends a `[[link]]` to the active note; other notes are never modified) and **copy button**
 - Suggested tags — tags frequent in the result set but missing from the active note; click to add to frontmatter
-- Exclusions: folders / tags / outlinks / body tokens ([semantics](#exclusion-semantics))
+- Exclusions: folders / tags / outlinks / content words ([semantics](#exclusion-semantics))
 
 ## Settings
 
@@ -91,18 +133,20 @@ Enabling it reads every `.md` once to build the index (~10–20s for 5,000 notes
 | Shared outlinks weight | 8 | |
 | Shared tags weight | 5 | |
 | Shared backlinks weight | 4 | |
-| Shared title words weight | 3 | Metadata-only (filenames). Set to 0 to disable |
-| Enable body-token matching | off | On reads all note bodies; off is metadata-only |
-| Body-token weight | 1.5 | Keep low (1–2) |
+| Direct link weight | 6 | Asymmetric link from candidate to active note |
+| Unlinked title mention weight | 8 | Exact full-title occurrence in the active body |
+| Same folder weight | 0 | Adds same-folder candidates only when greater than zero |
+| Shared content words weight | 1.5 | Title and body occurrences are deduplicated |
+| Enable body-token matching | on | Off avoids a vault-wide body index |
 | Salient tokens per note | 40 | Tokens retained per note |
-| Japanese word segmentation | on | TinySegmenter; turn off for mostly non-Japanese vaults to speed up indexing |
+| Vault-specific vocabulary | — | One term or `canonical|alias` group per line; longest match wins |
 | Show scores | on | |
 | Show shared reasons | on | What each match shares |
 | Hide already-linked | off | |
 | Excluded folders | — | One per line. `Daily/` and `/Daily` both work |
 | Excluded tags | — | One per line, no leading `#` |
 | Excluded links | — | One basename per line |
-| Excluded body tokens | — | Frequent-but-meaningless words specific to your vault |
+| Excluded content words | — | Applies to title and body words |
 
 ### Exclusion semantics
 
@@ -112,10 +156,19 @@ Enabling it reads every `.md` once to build the index (~10–20s for 5,000 notes
 
 To fully hide a class of notes, put them in a folder and exclude that folder.
 
-### Built-in stopwords
+### Vocabulary filtering
 
-The stopwords baked into body-token matching live in [`src/data/stopwords.ts`](./src/data/stopwords.ts). Every entry must belong to a vault-independent rationale category (closed-class grammar, basic vocabulary, conjugation fragments, pronouns, …) — no vault- or domain-specific word belongs there. If a word is common only in *your* vault, add it to the **Excluded body tokens** setting instead. Suggestions for the built-in list are welcome via [GitHub issue or PR](https://github.com/kogedango/suggested-notes-plugin).
+There is no bundled Japanese or English stopword list. Grammatical terms are
+removed by part of speech, overly common content terms are suppressed by
+document frequency, and vault-specific noise belongs in **Excluded content
+words**.
 
 ## License
 
-MIT
+Suggested Notes is licensed under the MIT License. Notices for
+Kuromoji/IPADIC, wink-nlp, and other bundled components are included in
+`THIRD_PARTY_NOTICES.md` and at the beginning of the distributed `main.js`.
+
+See [architecture.md](docs/architecture.md) for the current internal
+specification and [mobile-testing.md](docs/mobile-testing.md) for mobile
+verification status.

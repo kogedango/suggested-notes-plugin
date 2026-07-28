@@ -10,7 +10,16 @@ import {
 import { BodyTokenIndex } from "./cache/bodyTokens";
 import { InvertedIndex } from "./cache/inverted";
 import { MetadataStore } from "./cache/metadata";
+import {
+  MORPHOLOGY_CACHE_VERSION,
+  isPersistedPluginData,
+  isUsableMorphologyCache,
+  morphologyCacheSignature,
+  type MorphologyCacheSnapshot,
+  type PersistedPluginData,
+} from "./cache/morphologyCache";
 import { TitleTokenIndex } from "./cache/titleTokens";
+import type { MorphologyAnalyzer, TokenCounter } from "./analysis/types";
 import { t } from "./i18n";
 import { ScoringEngine } from "./scoring";
 import { RelatedNotesSettingTab } from "./settings/tab";
@@ -19,8 +28,10 @@ import { parseListInput } from "./util/list";
 import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
 const EMPTY_TOKENS: Set<string> = new Set();
-
-const BODY_REBUILD_DEBOUNCE_MS = 60_000;
+const MORPHOLOGY_SAVE_DEBOUNCE_MS = 1_500;
+const RESTORED_CACHE_ANALYZER: TokenCounter = {
+  tokenize: () => new Map(),
+};
 
 // Wiring contract for anything that needs to track vault changes to stay
 // current (store/inverted index, body-token corpus, title-token corpus).
@@ -40,16 +51,24 @@ export default class RelatedNotesPlugin extends Plugin {
   settings!: PluginSettings;
   private store!: MetadataStore;
   private inverted!: InvertedIndex;
-  private body!: BodyTokenIndex;
-  private titles!: TitleTokenIndex;
+  private body?: BodyTokenIndex;
+  private titles?: TitleTokenIndex;
+  private analyzer?: MorphologyAnalyzer;
   private scoring!: ScoringEngine;
   private cacheLayers: CacheLayer[] = [];
+  // Metadata suggestions work before the heavier analyzers are ready.
   private ready = false;
+  private morphologyReady = false;
+  private unloaded = false;
   private scheduleRefresh!: Debouncer<[], void>;
-  private bodyIndexBuilding = false;
+  private scheduleVocabularyRebuild!: Debouncer<[], void>;
+  private bodyRebuildPromise: Promise<void> | null = null;
   private bodyRebuildPending = false;
   private bodyRebuildNotify = false;
-  private scheduleBodyRebuild!: Debouncer<[], void>;
+  private loadedMorphologyCache?: MorphologyCacheSnapshot;
+  private analysisSignature?: string;
+  private dataSaveQueue: Promise<void> = Promise.resolve();
+  private morphologySaveTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRefreshedPath: string | null = null;
   private refreshVersion = 0;
 
@@ -58,14 +77,7 @@ export default class RelatedNotesPlugin extends Plugin {
 
     this.store = new MetadataStore(this.app);
     this.inverted = new InvertedIndex(this.store);
-    this.body = new BodyTokenIndex(this.app);
-    this.titles = new TitleTokenIndex(this.store);
-    this.scoring = new ScoringEngine(
-      this.store,
-      this.inverted,
-      this.body,
-      this.titles,
-    );
+    this.scoring = new ScoringEngine(this.store, this.inverted);
     this.cacheLayers = this.buildCacheLayers();
 
     this.registerView(
@@ -103,17 +115,9 @@ export default class RelatedNotesPlugin extends Plugin {
     });
 
     this.scheduleRefresh = debounce(() => void this.refresh(), 300, true);
-
-    // Auto corpus rebuild: a lazy backstop, not the primary path. Fires only
-    // after edits have settled for a full minute — re-tokenizing the whole
-    // vault per 3s typing pause was significant CPU (especially with the
-    // segmenter on), for a signal that mostly concerns *other* notes. When
-    // the corpus needs to be current right now, the settings-tab rebuild
-    // button / rebuild command do it on demand. Event-driven (a trailing
-    // debounce), not a polling loop — so "no background process" holds.
-    this.scheduleBodyRebuild = debounce(
-      () => void this.rebuildBodyIndex(),
-      BODY_REBUILD_DEBOUNCE_MS,
+    this.scheduleVocabularyRebuild = debounce(
+      () => void this.applyCustomVocabulary(),
+      800,
       true,
     );
 
@@ -138,7 +142,7 @@ export default class RelatedNotesPlugin extends Plugin {
 
     this.app.workspace.onLayoutReady(() => {
       this.activateView();
-      this.waitForMetadataResolved().then(() => this.initialIndex());
+      this.waitForMetadataResolved().then(() => this.initialMetadataIndex());
     });
 
     this.registerEvent(
@@ -169,6 +173,7 @@ export default class RelatedNotesPlugin extends Plugin {
         if (!this.ready) return;
         for (const layer of this.cacheLayers) layer.onDelete?.(af.path);
         this.scoring.markDirty();
+        this.scheduleMorphologyCachePersist();
         this.scheduleRefresh();
       }),
     );
@@ -179,32 +184,99 @@ export default class RelatedNotesPlugin extends Plugin {
         if (!this.ready) return;
         for (const layer of this.cacheLayers) layer.onRename?.(oldPath, af);
         this.scoring.markDirty();
+        this.scheduleMorphologyCachePersist();
         this.scheduleRefresh();
       }),
     );
   }
 
   onunload(): void {
+    this.unloaded = true;
     // Drop any pending trailing debounces so they can't fire after unload.
     this.scheduleRefresh.cancel();
-    this.scheduleBodyRebuild.cancel();
+    this.scheduleVocabularyRebuild.cancel();
+    if (this.morphologySaveTimer !== null) {
+      clearTimeout(this.morphologySaveTimer);
+      this.morphologySaveTimer = null;
+      // Obsidian does not await `onunload`, but starting the final queued save
+      // here still gives a pending edit the same durability as the previous
+      // immediate-save path.
+      void this.queueDataSave();
+    }
   }
 
   async loadSettings(): Promise<void> {
+    const raw = (await this.loadData()) as unknown;
+    const saved = (
+      isPersistedPluginData(raw) ? raw.settings : raw
+    ) as (Partial<PluginSettings> & Record<string, unknown>) | null;
+    if (saved) {
+      delete saved.bodyTokenSegmenterEnabled;
+      delete saved.builtinStopwordsEnabled;
+      // v0.4/v0.5 migration: lexical title/body overlap is now one content
+      // signal. Preserve the user's body weight and explicit body ON/OFF
+      // choice; a fresh install receives DEFAULT_SETTINGS (body ON).
+      if (
+        typeof saved.contentWeight !== "number" &&
+        typeof saved.bodyTokenWeight === "number"
+      ) {
+        saved.contentWeight = saved.bodyTokenWeight;
+      }
+      if (
+        !Array.isArray(saved.excludedContentTokens) &&
+        Array.isArray(saved.excludedBodyTokens)
+      ) {
+        saved.excludedContentTokens = saved.excludedBodyTokens;
+      }
+      delete saved.titleWeight;
+      delete saved.bodyTokenWeight;
+      delete saved.excludedBodyTokens;
+    }
     this.settings = Object.assign(
       {},
       DEFAULT_SETTINGS,
-      await this.loadData(),
+      saved,
     );
     // Heal lists saved before the comma-aware parser: a comma-separated line
     // used to be stored as one entry that could never match anything.
-    for (const key of ["excludedTags", "excludedBodyTokens"] as const) {
+    for (const key of ["excludedTags", "excludedContentTokens"] as const) {
       this.settings[key] = parseListInput(this.settings[key].join("\n"), true);
+    }
+    this.settings.customVocabulary = parseListInput(
+      this.settings.customVocabulary.join("\n"),
+      false,
+    );
+    const rawCache = isPersistedPluginData(raw)
+      ? raw.morphologyCache
+      : undefined;
+    if (isUsableMorphologyCache(rawCache, this.settings)) {
+      this.loadedMorphologyCache = rawCache;
+    }
+  }
+
+  scheduleVocabularyApply(): void {
+    this.scheduleVocabularyRebuild();
+  }
+
+  private async applyCustomVocabulary(): Promise<void> {
+    if (!this.analyzer || !this.titles || !this.body) return;
+    if (this.bodyRebuildPromise) await this.bodyRebuildPromise;
+    this.body.clear();
+    this.titles.invalidateAnalysis();
+    this.analyzer.setCustomVocabulary(this.settings.customVocabulary);
+    await this.titles.rebuildAll();
+    this.analysisSignature = morphologyCacheSignature(
+      this.settings.customVocabulary,
+    );
+    if (this.settings.bodyTokenEnabled) await this.rebuildBodyIndex();
+    else {
+      await this.persistMorphologyCache();
+      void this.refresh();
     }
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    await this.queueDataSave();
   }
 
   // Settings text fields call this per keystroke; route through the debounced
@@ -214,56 +286,58 @@ export default class RelatedNotesPlugin extends Plugin {
     this.scheduleRefresh();
   }
 
-  // Rebuilds the body-token corpus. Triggered on enable, on startup, by the
-  // manual command / settings-tab button, and by the lazy post-edit timer.
+  // Rebuilds the body-token corpus. Normal startup and file edits use the
+  // differential path; this forced pass is retained for the manual repair
+  // command and for explicitly enabling the feature after its cache was
+  // cleared.
   // If a rebuild is requested while one is running, we run once more
   // afterwards rather than dropping it — so the corpus always ends up
   // reflecting the latest edits. `notify` posts a Notice when this (or, if a
   // build is already running, that build's final pass) has finished.
   async rebuildBodyIndex(notify = false): Promise<void> {
-    // Whatever queued this lazy timer, the work is happening now.
-    this.scheduleBodyRebuild.cancel();
-    if (!this.ready) return;
+    if (!this.morphologyReady || !this.body) return;
     if (!this.settings.bodyTokenEnabled) {
+      if (this.bodyRebuildPromise) await this.bodyRebuildPromise;
       this.body.clear();
+      await this.persistMorphologyCache();
       void this.refresh();
       return;
     }
     if (notify) this.bodyRebuildNotify = true;
-    if (this.bodyIndexBuilding) {
+    if (this.bodyRebuildPromise) {
       this.bodyRebuildPending = true;
+      await this.bodyRebuildPromise;
       return;
     }
-    this.bodyIndexBuilding = true;
-    try {
-      do {
-        this.bodyRebuildPending = false;
-        await this.body.rebuildAll(
-          this.settings.bodyTokenTopN,
-          this.settings.bodyTokenSegmenterEnabled,
+    const body = this.body;
+    const rebuild = (async () => {
+      try {
+        do {
+          this.bodyRebuildPending = false;
+          await body.rebuildAll(this.settings.bodyTokenTopN);
+        } while (this.bodyRebuildPending);
+        if (this.bodyRebuildNotify) {
+          new Notice(t("noticeBodyTokenRebuilt"));
+        }
+        await this.persistMorphologyCache();
+      } catch (err) {
+        console.error("Suggested Notes: body-token index rebuild failed", err);
+        new Notice(
+          t("noticeBodyTokenRebuildFailed", {
+            message: err instanceof Error ? err.message : String(err),
+          }),
         );
-      } while (this.bodyRebuildPending);
-      if (this.bodyRebuildNotify) {
-        new Notice(t("noticeBodyTokenRebuilt"));
+      } finally {
+        this.bodyRebuildNotify = false;
       }
-    } catch (err) {
-      // Surface the failure instead of letting it become an unhandled
-      // rejection: silently swallowing it here would leave body matching
-      // inactive (built stays false on a first-run failure) with no signal
-      // to the user beyond a stuck "rebuilding…" state. Reported unconditionally
-      // (not gated on bodyRebuildNotify) since a first automatic/background
-      // rebuild failing is exactly the silent-until-now case this fixes.
-      console.error("Suggested Notes: body-token index rebuild failed", err);
-      new Notice(
-        t("noticeBodyTokenRebuildFailed", {
-          message: err instanceof Error ? err.message : String(err),
-        }),
-      );
+      void this.refresh();
+    })();
+    this.bodyRebuildPromise = rebuild;
+    try {
+      await rebuild;
     } finally {
-      this.bodyIndexBuilding = false;
-      this.bodyRebuildNotify = false;
+      if (this.bodyRebuildPromise === rebuild) this.bodyRebuildPromise = null;
     }
-    void this.refresh();
   }
 
   private waitForMetadataResolved(): Promise<void> {
@@ -280,22 +354,98 @@ export default class RelatedNotesPlugin extends Plugin {
     });
   }
 
-  private initialIndex(): void {
+  private initialMetadataIndex(): void {
     this.store.rebuildAll();
     this.inverted.rebuild();
+    this.scoring.rebuildTitleMentionIndex();
+    this.restoreCachedMorphologyForEarlyDisplay();
     this.scoring.markDirty();
     this.ready = true;
     void this.refresh();
-    if (this.settings.bodyTokenEnabled) {
-      void this.rebuildBodyIndex();
+    void this.initializeMorphology();
+  }
+
+  private async initializeMorphology(): Promise<void> {
+    try {
+      const { createBilingualAnalyzer } = await import("./analysis/runtime");
+      const analyzer = await createBilingualAnalyzer(
+        this.settings.customVocabulary,
+      );
+      if (this.unloaded) return;
+
+      const hadRestoredIndexes = !!this.titles;
+      const titles =
+        this.titles ?? new TitleTokenIndex(this.store, analyzer);
+      const body =
+        this.body ?? new BodyTokenIndex(this.app, analyzer, titles);
+      titles.setAnalyzer(analyzer);
+      body.setAnalyzer(analyzer);
+      this.analyzer = analyzer;
+      this.body = body;
+      this.titles = titles;
+      this.analysisSignature = morphologyCacheSignature(
+        this.settings.customVocabulary,
+      );
+      this.scoring.attachMorphology(body, titles, analyzer);
+
+      const cached = hadRestoredIndexes
+        ? undefined
+        : this.loadedMorphologyCache;
+      if (cached) {
+        const titlesRestored = titles.restore(cached.titles);
+        if (titlesRestored && this.settings.bodyTokenEnabled) {
+          body.restore(cached.bodies, this.settings.bodyTokenTopN);
+        }
+      }
+      this.morphologyReady = true;
+      // A restored corpus is usable immediately. Render it before checking
+      // file stamps and analyzing only changed/new notes in the background.
+      void this.refresh();
+
+      await titles.syncAll();
+      if (this.unloaded) return;
+      if (this.settings.bodyTokenEnabled) {
+        await body.syncAll(this.settings.bodyTokenTopN);
+      }
+      if (this.unloaded) return;
+      await this.persistMorphologyCache();
+      void this.refresh();
+    } catch (error) {
+      console.error("Suggested Notes: morphology initialization failed", error);
+      new Notice(
+        t("noticeMorphologyFailed", {
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
 
-  // Wires up the cache layers once, at plugin load: the metadata
-  // store+inverted-index pair (always current when ready), the body-token
-  // corpus (opt-in, debounced), and the title-token corpus (always on, lazy
-  // full rebuild on next read). Adding a new layer is one more object in
-  // this array; the event handlers below don't change.
+  private restoreCachedMorphologyForEarlyDisplay(): void {
+    const cached = this.loadedMorphologyCache;
+    if (!cached) return;
+    const titles = new TitleTokenIndex(
+      this.store,
+      RESTORED_CACHE_ANALYZER,
+    );
+    if (!titles.restore(cached.titles)) return;
+    const body = new BodyTokenIndex(
+      this.app,
+      RESTORED_CACHE_ANALYZER,
+      titles,
+    );
+    if (
+      this.settings.bodyTokenEnabled &&
+      !body.restore(cached.bodies, this.settings.bodyTokenTopN)
+    ) {
+      return;
+    }
+    this.titles = titles;
+    this.body = body;
+    this.scoring.attachCachedMorphology(body, titles);
+  }
+
+  // Wires up the cache layers once: metadata, titles, then bodies. The order
+  // matters because body df includes title occurrence.
   private buildCacheLayers(): CacheLayer[] {
     return [
       {
@@ -303,65 +453,130 @@ export default class RelatedNotesPlugin extends Plugin {
           const { prev, next } = this.store.update(file);
           if (prev) this.inverted.remove(prev);
           this.inverted.add(next);
+          if (!prev) this.scoring.addTitleMentionPath(next.path);
         },
         onDelete: (path) => {
           const snap = this.store.remove(path);
           if (snap) this.inverted.remove(snap);
+          this.scoring.removeTitleMentionPath(path);
         },
         onRename: (oldPath, file) => {
           const { prev, next } = this.store.rename(oldPath, file);
           if (prev) this.inverted.remove({ ...prev, path: oldPath });
           this.inverted.add(next);
+          this.scoring.renameTitleMentionPath(oldPath, next.path);
         },
       },
       {
-        // Only a real edit ("changed", not "resolve") and body matching
-        // being enabled trigger corpus work: the edited note's salient set is
-        // touched up right away (cheap, df untouched) so fresh text is
-        // discoverable from other notes immediately, and the lazy full
-        // rebuild is scheduled to refresh df. Delete/rename don't change note
-        // text, so they just re-key — and that re-keying is harmless even
-        // when body matching is off (a no-op if the path isn't indexed).
-        onChanged: (file, bodyMayHaveChanged) => {
-          if (!bodyMayHaveChanged || !this.settings.bodyTokenEnabled) return;
-          void this.body
-            .refreshNote(
-              file,
-              this.settings.bodyTokenTopN,
-              this.settings.bodyTokenSegmenterEnabled,
-            )
-            .then(() => this.scheduleRefresh());
-          this.scheduleBodyRebuild();
+        // Titles are keyed by path, so edits are a no-op while create,
+        // delete, and rename are updated exactly one file at a time.
+        onChanged: (file) => {
+          if (this.morphologyReady) this.titles?.add(file.path);
         },
         onDelete: (path) => {
-          // No body re-read needed: text didn't change, just drop the entry.
-          this.body.remove(path);
+          if (this.morphologyReady) this.titles?.remove(path);
         },
         onRename: (oldPath, file) => {
-          // No body re-read needed: text didn't change, just re-key the entry.
-          this.body.rename(oldPath, file.path);
+          if (this.morphologyReady) {
+            this.titles?.rename(oldPath, file.path);
+          }
         },
       },
       {
-        // Title tokens need no file read (the basename is already in every
-        // FileSnapshot's path), so there's no per-note refresh to do here —
-        // just invalidate the corpus. It rebuilds lazily, in full, the next
-        // time scoring reads it (see cache/titleTokens.ts for why a full
-        // rebuild is the simple choice for this signal specifically). A
-        // rename changes the title text itself (unlike body's rename, which
-        // only moves a key), so it must invalidate too, not just re-key.
-        // onChanged also fires for a brand-new file, which IS a title the
-        // corpus hasn't seen yet — there's no cheaper way to distinguish
-        // "new file" from "same file, body edited" here, so every edit marks
-        // the corpus dirty too. That costs nothing extra in practice: the
-        // rebuild is lazy (only pays for itself on the next actual read, at
-        // most once per debounced refresh) and cheap (tokenizing every
-        // basename in the vault, not every body).
-        onChanged: () => this.titles.markDirty(),
-        onDelete: () => this.titles.markDirty(),
-        onRename: () => this.titles.markDirty(),
+        // Keep this layer after titles: body df is the union of title and body
+        // occurrence, so a create/rename/delete must see the new title state.
+        onChanged: (file, bodyMayHaveChanged) => {
+          if (!bodyMayHaveChanged || !this.settings.bodyTokenEnabled) return;
+          if (!this.body || !this.morphologyReady) return;
+          void this.body
+            .refreshNote(file, this.settings.bodyTokenTopN)
+            .then(() => {
+              this.scheduleMorphologyCachePersist();
+              this.scheduleRefresh();
+            })
+            .catch((error) => {
+              console.error(
+                `Suggested Notes: failed to update body tokens for "${file.path}"`,
+                error,
+              );
+            });
+        },
+        onDelete: (path) => {
+          if (this.morphologyReady) this.body?.remove(path);
+        },
+        onRename: (oldPath, file) => {
+          if (this.morphologyReady) {
+            this.body?.rename(oldPath, file.path);
+          }
+        },
       },
     ];
+  }
+
+  async rerankBodyIndex(): Promise<void> {
+    if (!this.body || !this.morphologyReady) return;
+    this.body.rerank(this.settings.bodyTokenTopN);
+    await this.persistMorphologyCache();
+    void this.refresh();
+  }
+
+  private persistMorphologyCache(): Promise<void> {
+    return this.queueDataSave();
+  }
+
+  private scheduleMorphologyCachePersist(): void {
+    if (this.unloaded) return;
+    if (this.morphologySaveTimer !== null) {
+      clearTimeout(this.morphologySaveTimer);
+    }
+    this.morphologySaveTimer = setTimeout(() => {
+      this.morphologySaveTimer = null;
+      void this.queueDataSave();
+    }, MORPHOLOGY_SAVE_DEBOUNCE_MS);
+  }
+
+  private queueDataSave(): Promise<void> {
+    // An explicit settings/rebuild save subsumes any pending edit save.
+    if (this.morphologySaveTimer !== null) {
+      clearTimeout(this.morphologySaveTimer);
+      this.morphologySaveTimer = null;
+    }
+    const save = async () => {
+      const morphologyCache = this.currentMorphologyCache();
+      const data: PersistedPluginData = {
+        settings: this.settings,
+        ...(morphologyCache ? { morphologyCache } : {}),
+      };
+      await this.saveData(data);
+      this.loadedMorphologyCache = morphologyCache;
+    };
+    const queued = this.dataSaveQueue.catch(() => undefined).then(save);
+    this.dataSaveQueue = queued;
+    return queued;
+  }
+
+  private currentMorphologyCache(): MorphologyCacheSnapshot | undefined {
+    const expectedSignature = morphologyCacheSignature(
+      this.settings.customVocabulary,
+    );
+    if (
+      this.titles &&
+      this.body &&
+      this.analysisSignature === expectedSignature
+    ) {
+      return {
+        version: MORPHOLOGY_CACHE_VERSION,
+        signature: expectedSignature,
+        titles: this.titles.snapshot(),
+        bodies: this.body.snapshot(),
+      };
+    }
+    return isUsableMorphologyCache(
+      this.loadedMorphologyCache,
+      this.settings,
+    )
+      ? this.loadedMorphologyCache
+      : undefined;
   }
 
   // Shared by the "changed" and "resolve" handlers: re-snapshot the file and
@@ -410,14 +625,30 @@ export default class RelatedNotesPlugin extends Plugin {
       return;
     }
 
-    // The active note's body tokens are read fresh on demand.
+    // Body vocabulary and unlinked-title mentions share one active-note read.
+    // Mention detection remains available in lightweight mode; it never
+    // builds or reads a vault-wide body corpus.
+    const cachedContentIsSafe =
+      this.morphologyReady ||
+      this.settings.excludedContentTokens.length === 0;
+    const useBodyTokens =
+      cachedContentIsSafe &&
+      this.settings.bodyTokenEnabled &&
+      !!this.body?.isBuilt();
+    const needsActiveBody =
+      (useBodyTokens && this.morphologyReady) ||
+      this.settings.unlinkedMentionWeight > 0;
+    const activeBodyText = needsActiveBody
+      ? await this.app.vault.cachedRead(active)
+      : "";
     const activeBodyTokens =
-      this.settings.bodyTokenEnabled && this.body.isBuilt()
-        ? await this.body.computeSalient(
-            active,
-            this.settings.bodyTokenTopN,
-            this.settings.bodyTokenSegmenterEnabled,
-          )
+      useBodyTokens && this.body
+        ? this.morphologyReady
+          ? this.body.computeSalientText(
+              activeBodyText,
+              this.settings.bodyTokenTopN,
+            )
+          : this.body.salientFor(active.path)
         : EMPTY_TOKENS;
     // A newer refresh started while we were reading — let it render instead.
     if (version !== this.refreshVersion) return;
@@ -430,6 +661,7 @@ export default class RelatedNotesPlugin extends Plugin {
       active.path,
       this.settings,
       activeBodyTokens,
+      activeBodyText,
     );
     const suggestedTags = this.scoring.suggestTags(
       active.path,
