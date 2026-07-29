@@ -20,7 +20,9 @@ export function appendDetailedAnalysis(
   offset: number,
   target: DetailedAnalysis,
 ): void {
-  target.tokens.push(...source.tokens);
+  // Avoid passing one argument per token to Array.push. A very long
+  // analyzer span can otherwise exceed the engine's argument limit.
+  for (const token of source.tokens) target.tokens.push(token);
   for (const part of source.compoundParts) {
     target.compoundParts.push({
       ...part,

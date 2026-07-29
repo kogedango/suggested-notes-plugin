@@ -98,6 +98,7 @@ const en = {
 
   // Sidebar — row controls
   ariaCopyLink: "Copy link",
+  copyFeedback: "Copied",
   suggestAddTag: "Add #{tag} ({count} notes)",
 
   // Sidebar — inline reasons line
@@ -226,6 +227,7 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   sectionSuggestedTags: "おすすめタグ",
 
   ariaCopyLink: "リンクをコピー",
+  copyFeedback: "コピーしました",
   suggestAddTag: "#{tag} を追加({count}件のノート)",
 
   reasonLinksToThisNote: "このノートへリンク",

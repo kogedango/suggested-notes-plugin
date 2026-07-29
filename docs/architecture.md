@@ -299,6 +299,19 @@ would hold a second vault-sized representation for the session. The
 signature, which no longer holds once the live indexes have diverged, so
 releasing it changes no behaviour.
 
+### Analysis temporaries
+
+`BilingualMorphologyAnalyzer.analyze` remains the detailed public API and
+returns all `CanonicalToken` objects. The indexing path uses `tokenize`
+instead: it analyzes one prepared line at a time and immediately folds that
+line into the count map, so an entire note's occurrence objects are not retained
+at once. Compound detection still has the complete current line available.
+
+Token arrays from a single analyzer span are appended with iteration rather
+than `Array.push(...tokens)`. This avoids passing one JavaScript function
+argument per token, which can exceed the engine's argument limit for a
+pathologically long line.
+
 ### Unrealized improvements
 
 Costs that remain in the code. Recorded so they are not re-derived, and ordered
@@ -339,14 +352,6 @@ and `TitleTokenIndex.replaceTokens` construct a complete new inverted index whil
 the old one is still live. The per-note entries are shared after the change
 described under Index token maps, but the inverted and salient maps are not, so a
 rebuild still holds two copies of that structure.
-
-**Whole-body token arrays are materialized to be immediately folded.**
-`BilingualMorphologyAnalyzer.analyze` returns a `CanonicalToken[]` with one
-object per occurrence across the entire note, and `tokenize` — the only caller on
-the indexing path — reduces it to a count map. Counting during analysis would
-avoid the intermediate array. Related: `analyzePreparedLine` ends with
-`out.push(...analysis.tokens)`, which passes one argument per token and will
-throw on a pathologically long single line.
 
 **`BodyTokenIndex.pathRevisions` never drops entries.** `remove` and `rename`
 bump the revision for a path and delete its counts and stamps, but leave the
@@ -418,6 +423,7 @@ code.
 Every release candidate must pass:
 
 ```sh
+npm run validate:release
 npm run typecheck
 npm test
 npm run build

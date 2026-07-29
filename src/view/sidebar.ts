@@ -16,6 +16,7 @@ export const VIEW_TYPE_RELATED_NOTES = "suggested-notes-view";
 const REASONS_TIP_DELAY_MS = 350;
 const MOBILE_LONG_PRESS_MS = 500;
 const MOBILE_LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+const COPY_FEEDBACK_MS = 1400;
 
 export class RelatedNotesView extends ItemView {
   private reasonsTipEl: HTMLElement | null = null;
@@ -371,6 +372,7 @@ export class RelatedNotesView extends ItemView {
       copyBtn.empty();
       setIcon(copyBtn, "check");
       copyBtn.addClass("is-copied");
+      this.showCopyFeedback(self);
       copiedTimer = window.setTimeout(() => {
         copyBtn.empty();
         setIcon(copyBtn, "copy");
@@ -459,7 +461,7 @@ export class RelatedNotesView extends ItemView {
         // Releasing synthesizes a click that would open the note on top of the
         // copy. Swallow exactly that one click.
         swallowNextClick = true;
-        void this.copyLinkFromRow(activePath, targetPath);
+        void this.copyLinkFromRow(self, activePath, targetPath);
       },
       { passive: true },
     );
@@ -477,6 +479,7 @@ export class RelatedNotesView extends ItemView {
   }
 
   private async copyLinkFromRow(
+    self: HTMLElement,
     activePath: string,
     targetPath: string,
   ): Promise<void> {
@@ -485,13 +488,46 @@ export class RelatedNotesView extends ItemView {
     // feature being gone.
     try {
       if (!(await this.plugin.copyLinkToClipboard(activePath, targetPath))) {
+        new Notice(t("noticeLinkCopyFailed"));
         return;
       }
+      this.showCopyFeedback(self);
       new Notice(t("noticeLinkCopied"));
     } catch (error) {
       console.error("Suggested Notes: copying the link failed", error);
       new Notice(t("noticeLinkCopyFailed"));
     }
+  }
+
+  private showCopyFeedback(self: HTMLElement): void {
+    self.querySelector(".suggested-notes-copy-feedback")?.remove();
+    self.removeClass("is-copy-confirmed");
+    // Restart the row flash even when the same link is copied repeatedly.
+    void self.offsetWidth;
+    self.addClass("is-copy-confirmed");
+
+    const feedback = self.createSpan({
+      cls: "suggested-notes-copy-feedback",
+      attr: {
+        role: "status",
+        "aria-live": "polite",
+      },
+    });
+    const icon = feedback.createSpan({
+      cls: "suggested-notes-copy-feedback-icon",
+    });
+    setIcon(icon, "check");
+    feedback.createSpan({ text: t("copyFeedback") });
+
+    window.setTimeout(() => {
+      // An earlier timer must not clear a newer repeated-copy animation.
+      if (
+        self.querySelector(".suggested-notes-copy-feedback") === feedback
+      ) {
+        feedback.remove();
+        self.removeClass("is-copy-confirmed");
+      }
+    }, COPY_FEEDBACK_MS);
   }
 
   private renderTags(

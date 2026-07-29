@@ -142,6 +142,23 @@ describe("BilingualMorphologyAnalyzer", () => {
     );
   });
 
+  it("counts analyzed lines without materializing the public analyze result", () => {
+    const analyzer = new BilingualMorphologyAnalyzer(
+      new RecordingJapanese(),
+      new RecordingEnglish(),
+    );
+    analyzer.analyze = () => {
+      throw new Error("tokenize must not call analyze");
+    };
+
+    expect(analyzer.tokenize("Alpha beta\nalpha")).toEqual(
+      new Map([
+        ["alpha", 2],
+        ["beta", 1],
+      ]),
+    );
+  });
+
   it("merges alias groups transitively when they share a spelling", () => {
     const analyzer = new BilingualMorphologyAnalyzer(
       new RecordingJapanese(),

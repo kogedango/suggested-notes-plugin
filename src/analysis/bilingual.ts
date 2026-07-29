@@ -38,27 +38,40 @@ export class BilingualMorphologyAnalyzer implements MorphologyAnalyzer {
 
   analyze(text: string): CanonicalToken[] {
     const out: CanonicalToken[] = [];
-    const prose = stripTokenizableStructures(text, true);
-    for (const line of prose.split(/\r?\n/)) {
-      this.analyzeLineWithProtectedSymbols(line, out);
-    }
+    this.forEachAnalyzedLine(text, (tokens) => {
+      for (const token of tokens) out.push(token);
+    });
     return out;
   }
 
   tokenize(text: string): Map<string, number> {
     const counts = new Map<string, number>();
-    for (const token of this.analyze(text)) {
-      counts.set(token.key, (counts.get(token.key) ?? 0) + 1);
-    }
+    // Indexing needs counts, not one CanonicalToken object per occurrence for
+    // the whole note. Fold each completed line immediately so only that line's
+    // analysis remains live.
+    this.forEachAnalyzedLine(text, (tokens) => {
+      for (const token of tokens) {
+        counts.set(token.key, (counts.get(token.key) ?? 0) + 1);
+      }
+    });
     return counts;
+  }
+
+  private forEachAnalyzedLine(
+    text: string,
+    visit: (tokens: readonly CanonicalToken[]) => void,
+  ): void {
+    const prose = stripTokenizableStructures(text, true);
+    for (const line of prose.split(/\r?\n/)) {
+      visit(this.analyzeLineWithProtectedSymbols(line));
+    }
   }
 
   private analyzePreparedLine(
     line: string,
-    out: CanonicalToken[],
     placeholder?: string,
     protectedTerms: CustomTerm[] = [],
-  ): void {
+  ): CanonicalToken[] {
     const analysis: DetailedAnalysis = {
       tokens: [],
       compoundParts: [],
@@ -110,24 +123,20 @@ export class BilingualMorphologyAnalyzer implements MorphologyAnalyzer {
       analysis,
     );
     emitCrossLaneCompounds(analysis.compoundParts, analysis.tokens);
-    out.push(...analysis.tokens);
+    return analysis.tokens;
   }
 
   private analyzeLineWithProtectedSymbols(
     line: string,
-    out: CanonicalToken[],
-  ): void {
+  ): CanonicalToken[] {
     const protectedLine = this.customVocabulary.protectSymbolTerms(line);
     if (!protectedLine) {
-      this.analyzePreparedLine(
+      return this.analyzePreparedLine(
         preprocessTokenizablePlainText(line),
-        out,
       );
-      return;
     }
-    this.analyzePreparedLine(
+    return this.analyzePreparedLine(
       preprocessTokenizablePlainText(protectedLine.text),
-      out,
       protectedLine.placeholder,
       protectedLine.terms,
     );

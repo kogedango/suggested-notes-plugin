@@ -62,6 +62,8 @@ platforms must remain explicitly labeled as unverified.
 - Unlinked title mentions work without counting existing links.
 - A row tap opens the note, a score tap toggles its details, and a row long
   press copies the link without also opening the note.
+- Releasing an armed long press flashes the row and shows the check-marked
+  copied label clearly without shifting the list.
 - The long-pressed link pastes correctly into a note. WebKit refuses clipboard
   writes without user activation, so a silent no-op here means the write is
   running outside the touch handler.
