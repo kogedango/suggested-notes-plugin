@@ -54,6 +54,19 @@ describe("TitleTokenIndex", () => {
     expect(index.totalNotesCount()).toBe(0);
   });
 
+  // The caller persists the cache on the strength of this return value: with
+  // body matching off, nothing else reports that a create changed it.
+  it("reports whether add changed the index", async () => {
+    const store = new SnapshotStore();
+    store.rebuildAll([snapshot("Known.md")]);
+    const index = new TitleTokenIndex(store, words);
+    await index.rebuildAll();
+
+    expect(index.add("Fresh Note.md")).toBe(true);
+    expect(index.add("Fresh Note.md")).toBe(false);
+    expect(index.add("Known.md")).toBe(false);
+  });
+
   it("restores cached titles and analyzes only missing paths", async () => {
     const store = new SnapshotStore();
     store.rebuildAll([snapshot("Cached.md"), snapshot("New Topic.md")]);

@@ -18,7 +18,10 @@ The normative implementation design is `docs/architecture.md`.
 1. Load settings and register the view, settings, commands, and events.
 2. Wait for Obsidian metadata resolution.
 3. Build metadata caches and render tag/link/backlink results.
-4. Restore a valid persisted morphology cache for early lexical results.
+4. Restore a valid persisted morphology cache for early lexical results. It
+   lives in `morphology-cache.json` in the plugin folder; `data.json` holds
+   settings only. Edits mark the cache dirty and a periodic flush writes it —
+   never write it per edit.
 5. Dynamically initialize one Kuromoji/IPADIC analyzer and one wink-nlp
    English analyzer.
 6. Share that analyzer pair between titles, bodies, and user exclusions.

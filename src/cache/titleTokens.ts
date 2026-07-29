@@ -104,14 +104,17 @@ export class TitleTokenIndex {
     }
   }
 
-  add(path: string): void {
-    if (this.tokens.has(path)) return;
+  // Reports whether the path was actually new, so a caller can tell a real
+  // change from the no-op an already-known path produces.
+  add(path: string): boolean {
+    if (this.tokens.has(path)) return false;
     this.generation++;
     const set = new Set(this.analyzer.tokenize(basename(path)).keys());
     this.tokens.set(path, set);
     this.totalNotes++;
     addPath(this.inverted, this.df, path, set);
     this.idfCache.clear();
+    return true;
   }
 
   remove(path: string): void {

@@ -14,6 +14,9 @@ export interface MorphologyCacheSnapshot {
   bodies: BodyTokenCacheEntry[];
 }
 
+// The shape data.json had while the cache still travelled with
+// the settings. Current versions write the settings object alone and keep the
+// cache in its own file; this type exists to read the old layout.
 export interface PersistedPluginData {
   settings: PluginSettings;
   morphologyCache?: MorphologyCacheSnapshot;
@@ -36,6 +39,25 @@ export function isUsableMorphologyCache(
     Array.isArray(value.titles) &&
     Array.isArray(value.bodies)
   );
+}
+
+// An upgrade from that layout reuses the cache already sitting in
+// data.json instead of forcing a rebuild. The next flush writes it to the
+// cache file and rewrites data.json without it.
+export function extractLegacyMorphologyCache(
+  raw: unknown,
+  settings: PluginSettings,
+): MorphologyCacheSnapshot | undefined {
+  if (!isPersistedPluginData(raw)) return undefined;
+  return isUsableMorphologyCache(raw.morphologyCache, settings)
+    ? raw.morphologyCache
+    : undefined;
+}
+
+// True while data.json still carries a cache — including an unusable one, which
+// is exactly the copy worth dropping.
+export function hasLegacyMorphologyCache(raw: unknown): boolean {
+  return isPersistedPluginData(raw) && raw.morphologyCache !== undefined;
 }
 
 export function isPersistedPluginData(

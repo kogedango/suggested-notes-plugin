@@ -11,12 +11,18 @@ import { BodyTokenIndex } from "./cache/bodyTokens";
 import { InvertedIndex } from "./cache/inverted";
 import { MetadataStore } from "./cache/metadata";
 import {
+  morphologyCachePath,
+  readMorphologyCacheFile,
+  writeMorphologyCacheFile,
+} from "./cache/cacheFile";
+import {
   MORPHOLOGY_CACHE_VERSION,
+  extractLegacyMorphologyCache,
+  hasLegacyMorphologyCache,
   isPersistedPluginData,
   isUsableMorphologyCache,
   morphologyCacheSignature,
   type MorphologyCacheSnapshot,
-  type PersistedPluginData,
 } from "./cache/morphologyCache";
 import { TitleTokenIndex } from "./cache/titleTokens";
 import type { MorphologyAnalyzer, TokenCounter } from "./analysis/types";
@@ -28,7 +34,11 @@ import { parseListInput } from "./util/list";
 import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
 const EMPTY_TOKENS: Set<string> = new Set();
-const MORPHOLOGY_SAVE_DEBOUNCE_MS = 1_500;
+// The cache is written whole, so writing it per edit meant rewriting a
+// vault-sized file every time typing paused. It is only a cache: losing the
+// last few minutes of tokenization costs one background resync, so edits just
+// mark it dirty and this interval — not the edit — decides when to write.
+const MORPHOLOGY_FLUSH_INTERVAL_MS = 180_000;
 const RESTORED_CACHE_ANALYZER: TokenCounter = {
   tokenize: () => new Map(),
 };
@@ -68,7 +78,9 @@ export default class RelatedNotesPlugin extends Plugin {
   private loadedMorphologyCache?: MorphologyCacheSnapshot;
   private analysisSignature?: string;
   private dataSaveQueue: Promise<void> = Promise.resolve();
-  private morphologySaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private morphologyCachePath!: string;
+  private morphologyCacheDirty = false;
+  private legacyCacheInDataJson = false;
   private lastRefreshedPath: string | null = null;
   private refreshVersion = 0;
 
@@ -119,6 +131,13 @@ export default class RelatedNotesPlugin extends Plugin {
       () => void this.applyCustomVocabulary(),
       800,
       true,
+    );
+
+    this.registerInterval(
+      window.setInterval(
+        () => void this.flushMorphologyCache(),
+        MORPHOLOGY_FLUSH_INTERVAL_MS,
+      ),
     );
 
     // Active-leaf-change updates immediately if ready, otherwise leaves the
@@ -173,7 +192,7 @@ export default class RelatedNotesPlugin extends Plugin {
         if (!this.ready) return;
         for (const layer of this.cacheLayers) layer.onDelete?.(af.path);
         this.scoring.markDirty();
-        this.scheduleMorphologyCachePersist();
+        this.markMorphologyCacheDirty();
         this.scheduleRefresh();
       }),
     );
@@ -184,7 +203,7 @@ export default class RelatedNotesPlugin extends Plugin {
         if (!this.ready) return;
         for (const layer of this.cacheLayers) layer.onRename?.(oldPath, af);
         this.scoring.markDirty();
-        this.scheduleMorphologyCachePersist();
+        this.markMorphologyCacheDirty();
         this.scheduleRefresh();
       }),
     );
@@ -195,14 +214,10 @@ export default class RelatedNotesPlugin extends Plugin {
     // Drop any pending trailing debounces so they can't fire after unload.
     this.scheduleRefresh.cancel();
     this.scheduleVocabularyRebuild.cancel();
-    if (this.morphologySaveTimer !== null) {
-      clearTimeout(this.morphologySaveTimer);
-      this.morphologySaveTimer = null;
-      // Obsidian does not await `onunload`, but starting the final queued save
-      // here still gives a pending edit the same durability as the previous
-      // immediate-save path.
-      void this.queueDataSave();
-    }
+    // Obsidian does not await `onunload`, so this last write may not finish.
+    // The periodic flush — not this one — is what actually bounds how much
+    // tokenization a hard quit can cost.
+    if (this.morphologyCacheDirty) void this.flushMorphologyCache();
   }
 
   async loadSettings(): Promise<void> {
@@ -246,12 +261,26 @@ export default class RelatedNotesPlugin extends Plugin {
       this.settings.customVocabulary.join("\n"),
       false,
     );
-    const rawCache = isPersistedPluginData(raw)
-      ? raw.morphologyCache
-      : undefined;
-    if (isUsableMorphologyCache(rawCache, this.settings)) {
-      this.loadedMorphologyCache = rawCache;
+    this.morphologyCachePath = morphologyCachePath(
+      this.manifest.dir,
+      this.app.vault.configDir,
+      this.manifest.id,
+    );
+    // An earlier data.json may still hold a usable cache. Reuse it so upgrading
+    // doesn't cost a full rebuild, and mark it dirty so the first flush moves
+    // it into the cache file and drops it from data.json.
+    this.legacyCacheInDataJson = hasLegacyMorphologyCache(raw);
+    const legacy = extractLegacyMorphologyCache(raw, this.settings);
+    if (legacy) {
+      this.loadedMorphologyCache = legacy;
+      this.morphologyCacheDirty = true;
+      return;
     }
+    this.loadedMorphologyCache = await readMorphologyCacheFile(
+      this.app.vault.adapter,
+      this.morphologyCachePath,
+      this.settings,
+    );
   }
 
   scheduleVocabularyApply(): void {
@@ -276,7 +305,7 @@ export default class RelatedNotesPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    await this.queueDataSave();
+    await this.queueSettingsSave();
   }
 
   // Settings text fields call this per keystroke; route through the debounced
@@ -470,8 +499,13 @@ export default class RelatedNotesPlugin extends Plugin {
       {
         // Titles are keyed by path, so edits are a no-op while create,
         // delete, and rename are updated exactly one file at a time.
+        // A new note changes the title cache here. With body matching off the
+        // layer below never runs, so this is the only place that can mark the
+        // cache dirty for a create — without it, a restart would show the note
+        // missing from early results until morphology finishes initializing.
         onChanged: (file) => {
-          if (this.morphologyReady) this.titles?.add(file.path);
+          if (!this.morphologyReady) return;
+          if (this.titles?.add(file.path)) this.markMorphologyCacheDirty();
         },
         onDelete: (path) => {
           if (this.morphologyReady) this.titles?.remove(path);
@@ -491,7 +525,7 @@ export default class RelatedNotesPlugin extends Plugin {
           void this.body
             .refreshNote(file, this.settings.bodyTokenTopN)
             .then(() => {
-              this.scheduleMorphologyCachePersist();
+              this.markMorphologyCacheDirty();
               this.scheduleRefresh();
             })
             .catch((error) => {
@@ -513,44 +547,65 @@ export default class RelatedNotesPlugin extends Plugin {
     ];
   }
 
+  // The top-N setting is a text field, so this runs per keystroke. Rerank and
+  // re-render immediately, but let the periodic flush persist it — writing the
+  // whole cache on every keystroke is what this design exists to avoid.
   async rerankBodyIndex(): Promise<void> {
     if (!this.body || !this.morphologyReady) return;
     this.body.rerank(this.settings.bodyTokenTopN);
-    await this.persistMorphologyCache();
+    this.markMorphologyCacheDirty();
     void this.refresh();
   }
 
+  // Rebuilds and vocabulary changes write immediately: they are rare, and they
+  // are exactly the states a cold start would otherwise have to redo.
   private persistMorphologyCache(): Promise<void> {
-    return this.queueDataSave();
+    return this.flushMorphologyCache(true);
   }
 
-  private scheduleMorphologyCachePersist(): void {
+  private markMorphologyCacheDirty(): void {
     if (this.unloaded) return;
-    if (this.morphologySaveTimer !== null) {
-      clearTimeout(this.morphologySaveTimer);
-    }
-    this.morphologySaveTimer = setTimeout(() => {
-      this.morphologySaveTimer = null;
-      void this.queueDataSave();
-    }, MORPHOLOGY_SAVE_DEBOUNCE_MS);
+    this.morphologyCacheDirty = true;
   }
 
-  private queueDataSave(): Promise<void> {
-    // An explicit settings/rebuild save subsumes any pending edit save.
-    if (this.morphologySaveTimer !== null) {
-      clearTimeout(this.morphologySaveTimer);
-      this.morphologySaveTimer = null;
-    }
+  // data.json now carries the settings alone, so its size no longer follows
+  // the vault's.
+  private queueSettingsSave(): Promise<void> {
     const save = async () => {
-      const morphologyCache = this.currentMorphologyCache();
-      const data: PersistedPluginData = {
-        settings: this.settings,
-        ...(morphologyCache ? { morphologyCache } : {}),
-      };
-      await this.saveData(data);
-      this.loadedMorphologyCache = morphologyCache;
+      await this.saveData(this.settings);
+      this.legacyCacheInDataJson = false;
     };
     const queued = this.dataSaveQueue.catch(() => undefined).then(save);
+    this.dataSaveQueue = queued;
+    return queued;
+  }
+
+  private flushMorphologyCache(force = false): Promise<void> {
+    if (!force && !this.morphologyCacheDirty) return Promise.resolve();
+    this.morphologyCacheDirty = false;
+    const write = async () => {
+      const cache = this.currentMorphologyCache();
+      if (!cache) return;
+      try {
+        await writeMorphologyCacheFile(
+          this.app.vault.adapter,
+          this.morphologyCachePath,
+          cache,
+        );
+        this.loadedMorphologyCache = cache;
+        // The copy inside an earlier data.json is redundant only once the cache
+        // file itself is on disk.
+        if (this.legacyCacheInDataJson) await this.saveData(this.settings);
+        this.legacyCacheInDataJson = false;
+      } catch (error) {
+        console.error(
+          "Suggested Notes: failed to persist the morphology cache",
+          error,
+        );
+        this.morphologyCacheDirty = true;
+      }
+    };
+    const queued = this.dataSaveQueue.catch(() => undefined).then(write);
     this.dataSaveQueue = queued;
     return queued;
   }

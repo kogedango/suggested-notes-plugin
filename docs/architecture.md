@@ -167,6 +167,25 @@ The persisted morphology cache is versioned and signed by analysis-affecting
 settings. A valid cache can provide early lexical results while changed and new
 notes are synchronized in the background.
 
+It is stored in `morphology-cache.json` inside the plugin folder, not in
+`data.json`. `saveData` rewrites its entire payload, so a cache kept there made
+every settings change write a vault-sized file. `data.json` now holds the
+settings alone and its size no longer follows the Vault's.
+
+The cache file is written whole, so writing timing rather than write size is
+what bounds the cost:
+
+- a note edit only marks the cache dirty;
+- a periodic flush writes it when dirty, as does plugin unload;
+- rebuilds and custom-vocabulary changes flush immediately, because those are
+  the states a cold start would otherwise redo.
+
+Nothing in the file is authoritative. A missing, truncated, or stale cache is
+treated exactly like a cold start: entry validation in `TitleTokenIndex.restore`
+and `BodyTokenIndex.restore` rejects a malformed snapshot whole rather than
+restoring part of it, and the corpus is rebuilt. A cache found in an earlier
+`data.json` is reused once and moved to the cache file on the next flush.
+
 ## Content field and scoring
 
 A note's lexical field is:
