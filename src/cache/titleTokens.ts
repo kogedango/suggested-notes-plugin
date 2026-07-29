@@ -30,13 +30,23 @@ export class TitleTokenIndex {
     this.generation++;
   }
 
-  restore(entries: unknown): boolean {
-    if (!Array.isArray(entries)) return false;
-    const nextTokens = new Map<string, Set<string>>();
-    for (const entry of entries) {
-      if (!isTitleTokenCacheEntry(entry)) return false;
-      nextTokens.set(entry.path, new Set(entry.tokens));
+  restore(
+    entries: unknown,
+    options: { consume?: boolean } = {},
+  ): boolean {
+    if (
+      !Array.isArray(entries) ||
+      !entries.every(isTitleTokenCacheEntry)
+    ) {
+      return false;
     }
+    const nextTokens = new Map<string, Set<string>>();
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
+      nextTokens.set(entry.path, new Set(entry.tokens));
+      if (options.consume) entry.tokens.length = 0;
+    }
+    if (options.consume) entries.length = 0;
     this.replaceTokens(nextTokens);
     return true;
   }
@@ -192,7 +202,9 @@ export class TitleTokenIndex {
   }
 }
 
-function isTitleTokenCacheEntry(value: unknown): value is TitleTokenCacheEntry {
+export function isTitleTokenCacheEntry(
+  value: unknown,
+): value is TitleTokenCacheEntry {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Record<string, unknown>;
   return (

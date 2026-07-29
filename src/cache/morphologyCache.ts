@@ -1,6 +1,12 @@
 import type { PluginSettings } from "../types";
-import type { BodyTokenCacheEntry } from "./bodyTokens";
-import type { TitleTokenCacheEntry } from "./titleTokens";
+import {
+  isBodyTokenCacheEntry,
+  type BodyTokenCacheEntry,
+} from "./bodyTokens";
+import {
+  isTitleTokenCacheEntry,
+  type TitleTokenCacheEntry,
+} from "./titleTokens";
 
 // Bump when canonical tokenization or serialization changes.
 export const MORPHOLOGY_CACHE_VERSION = 2;
@@ -37,7 +43,9 @@ export function isUsableMorphologyCache(
     value.version === MORPHOLOGY_CACHE_VERSION &&
     value.signature === morphologyCacheSignature(settings.customVocabulary) &&
     Array.isArray(value.titles) &&
-    Array.isArray(value.bodies)
+    value.titles.every(isTitleTokenCacheEntry) &&
+    Array.isArray(value.bodies) &&
+    value.bodies.every(isBodyTokenCacheEntry)
   );
 }
 

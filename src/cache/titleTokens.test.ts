@@ -104,4 +104,13 @@ describe("TitleTokenIndex", () => {
     expect(await index.syncAll()).toBe(false);
     expect(index.tokensFor("Cached.md")).toBe(restoredTokens);
   });
+
+  it("releases serialized title entries while consuming a valid cache", () => {
+    const entries = [{ path: "Cached.md", tokens: ["cached"] }];
+    const index = new TitleTokenIndex(new SnapshotStore(), words);
+
+    expect(index.restore(entries, { consume: true })).toBe(true);
+    expect(entries).toEqual([]);
+    expect(index.tokensFor("Cached.md")).toEqual(new Set(["cached"]));
+  });
 });

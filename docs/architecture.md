@@ -267,9 +267,12 @@ larger feature buffer is decompressed; feature offsets are then read from that
 small retained record copy. The raw `tid.dat`/`unk.dat` allocations are no
 longer referenced when their corresponding raw feature allocations are created.
 
-The trade is still not uniform: `tid_pos.dat` spends 34.36 MB of transient
-allocation to reclaim 5.64 MB, and passing that one buffer through unchanged
-would trade a 5.6 MB larger steady state for a roughly 34 MB lower copy peak.
+The trade is not uniform: compacting `tid_pos.dat` would spend 34.36 MB of
+transient allocation to reclaim only 5.64 MB. The runtime therefore passes that
+one buffer through unchanged. This makes the retained dictionary total about
+61.5 MB rather than 55.9 MB, but lowers its initialization copy peak by roughly
+34 MB. The table's live-range column documents the data layout rather than the
+chosen allocation for this one file.
 
 ### Index token maps
 
@@ -302,6 +305,23 @@ complete replacement maps while the old three were still retained. The
 per-note sets themselves remain immutable: clearing a containing map does not
 mutate a set already returned to a caller.
 
+### Compressed dictionary payloads
+
+The `.gz` files remain embedded in `main.js`, preserving the single-file
+community-store/BRAT distribution and its bundled Apache/IPADIC notices. A
+build-time loader exposes each payload through a one-shot function rather than a
+module-scope `Uint8Array`. Initialization takes and decompresses one file at a
+time, then clears the module's base64 binding. The approximately 17.0 MiB of
+decoded compressed buffers are therefore eligible for collection after
+initialization instead of remaining alongside the decompressed dictionary for
+the session. `createJapaneseAnalyzer` caches its promise, so another caller
+shares the initialized tokenizer rather than consuming the payloads again.
+
+The encoded literals necessarily remain part of the `main.js` source; whether
+V8 keeps their source backing in resident memory is an engine detail. The
+improvement guaranteed by the code is removal of the decoded compressed
+`Uint8Array` references.
+
 ### The loaded cache snapshot
 
 `loadedMorphologyCache` holds the deserialized cache and is only an input to
@@ -311,6 +331,12 @@ would hold a second vault-sized representation for the session. The
 `currentMorphologyCache` fallback that read it required a matching vocabulary
 signature, which no longer holds once the live indexes have diverged, so
 releasing it changes no behaviour.
+
+Restore validates every serialized title and body entry before allocating live
+maps. It then consumes entries one by one, dropping each serialized token array
+as soon as its `Set` or `Map` exists. Early display releases the snapshot field
+immediately; analyzer initialization no longer extends the lifetime of that
+second corpus representation.
 
 ### Cache serialization
 
@@ -345,35 +371,21 @@ by size. The dictionary figures above are measured; the rest are structural
 readings of the code and are not profiled, so treat their magnitudes as shapes
 rather than numbers.
 
-**Retained compressed dictionary payloads — about 19 MB, steady state.** The
-`.gz` imports are base64 literals in `main.js`, decoded by esbuild's binary
-loader into module-scope `Uint8Array`s. The module sits behind the dynamic
-`import("./analysis/runtime")`, so nothing is decoded until morphology starts —
-but once `createJapaneseAnalyzer` returns, the compressed bytes are still bound
-at module scope and stay reachable for the session, alongside the decompressed
-buffers they produced. An imported binding cannot be reassigned, so releasing
-them means not holding them as module bindings: reading the dictionary from
-plugin-folder assets would do it, at the cost of the single self-contained
-`main.js` that the licensing and distribution rules depend on. This is now the
-largest single steady-state item and the least convenient to remove.
-
-**Cache restore still holds three representations — transient, scales with the
-Vault.** `adapter.read` returns the whole file as one string, `JSON.parse` builds
-the complete snapshot object, and `restore` then builds the Maps. The streaming
-writer removes the equivalent recurring save-side peak, but reducing the
-cold-start read peak needs an incremental JSON parser or a different chunked
-cache format. That adds format and recovery complexity to data that is only a
-rebuildable optimization.
-
-**`tid_pos.dat` compaction is a poor peak/steady trade.** Covered above: 34.36 MB
-transient to reclaim 5.64 MB. Passing that one buffer through uncompacted is a
-single-line change if peak turns out to matter more than steady state.
+**Cache parsing still starts with two complete representations — transient,
+scales with the Vault.** `adapter.read` returns the whole file as one string and
+`JSON.parse` builds the complete snapshot object before entry-by-entry restore
+can release it. Obsidian's cross-platform `DataAdapter` does not expose ranged
+text reads. Reducing that cold-start peak further therefore needs multiple cache
+files or a platform-specific reader, adding cleanup, atomicity, and mobile
+compatibility risks to data that is only a rebuildable optimization.
 
 **Title index rebuilds duplicate the token → paths sets.**
-`TitleTokenIndex.rebuildAll` yields between batches, so its old inverted index
-must remain queryable until the replacement is complete. It therefore still
-holds old and new posting sets during a rebuild. Unlike the body recompute above,
-mutating it in place would expose a partially rebuilt index between yields.
+`TitleTokenIndex.rebuildAll` yields between bounded batches so the UI remains
+responsive, while its old inverted index stays queryable until the replacement
+is complete. Building postings only after the yielded pass would avoid the
+overlap but introduce one unbounded synchronous phase. Title postings are much
+smaller than the dictionary and body corpus, so responsiveness takes precedence
+unless profiling identifies this as a real peak.
 
 ## Content field and scoring
 

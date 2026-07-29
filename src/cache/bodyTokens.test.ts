@@ -19,6 +19,35 @@ function file(path: string, mtime = 1, size = 1): TFile {
 }
 
 describe("BodyTokenIndex", () => {
+  it("releases serialized body entries while consuming a valid cache", () => {
+    const entries = [
+      {
+        path: "cached.md",
+        mtime: 1,
+        size: 10,
+        tokens: [["cached", 1] as [string, number]],
+      },
+    ];
+    const app = {
+      vault: {
+        getMarkdownFiles: () => [],
+        cachedRead: async () => "",
+      },
+    } as unknown as App;
+    const index = new BodyTokenIndex(app, words);
+
+    expect(index.restore(entries, 40, { consume: true })).toBe(true);
+    expect(entries).toEqual([]);
+    expect(index.snapshot()).toEqual([
+      {
+        path: "cached.md",
+        mtime: 1,
+        size: 10,
+        tokens: [["cached", 1]],
+      },
+    ]);
+  });
+
   it("builds df and swaps a complete salient corpus", async () => {
     const bodies = new Map([
       ["a.md", "shared shared alpha"],

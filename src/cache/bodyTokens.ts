@@ -152,15 +152,26 @@ export class BodyTokenIndex {
     if (removed && this.built) this.recompute(this.topN);
   }
 
-  restore(entries: unknown, topN: number): boolean {
-    if (!Array.isArray(entries)) return false;
+  restore(
+    entries: unknown,
+    topN: number,
+    options: { consume?: boolean } = {},
+  ): boolean {
+    if (
+      !Array.isArray(entries) ||
+      !entries.every(isBodyTokenCacheEntry)
+    ) {
+      return false;
+    }
     const nextCounts = new Map<string, Map<string, number>>();
     const nextStamps = new Map<string, FileStamp>();
-    for (const entry of entries) {
-      if (!isBodyTokenCacheEntry(entry)) return false;
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
       nextCounts.set(entry.path, new Map(entry.tokens));
       nextStamps.set(entry.path, { mtime: entry.mtime, size: entry.size });
+      if (options.consume) entry.tokens.length = 0;
     }
+    if (options.consume) entries.length = 0;
     this.inFlightReads.clear();
     this.counts = nextCounts;
     this.stamps = nextStamps;
@@ -363,7 +374,9 @@ function stampOf(file: TFile): FileStamp {
   return { mtime: file.stat.mtime, size: file.stat.size };
 }
 
-function isBodyTokenCacheEntry(value: unknown): value is BodyTokenCacheEntry {
+export function isBodyTokenCacheEntry(
+  value: unknown,
+): value is BodyTokenCacheEntry {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Record<string, unknown>;
   return (

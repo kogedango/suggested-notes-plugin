@@ -77,6 +77,7 @@ export default class RelatedNotesPlugin extends Plugin {
   private bodyRebuildPending = false;
   private bodyRebuildNotify = false;
   private loadedMorphologyCache?: MorphologyCacheSnapshot;
+  private restoredMorphologyCache = false;
   private analysisSignature?: string;
   private dataSaveQueue: Promise<void> = Promise.resolve();
   private morphologyCachePath!: string;
@@ -403,7 +404,8 @@ export default class RelatedNotesPlugin extends Plugin {
       );
       if (this.unloaded) return;
 
-      const hadLoadedMorphologyCache = !!this.loadedMorphologyCache;
+      const hadLoadedMorphologyCache =
+        this.restoredMorphologyCache || !!this.loadedMorphologyCache;
       const hadRestoredIndexes = !!this.titles;
       const titles =
         this.titles ?? new TitleTokenIndex(this.store, analyzer);
@@ -475,7 +477,7 @@ export default class RelatedNotesPlugin extends Plugin {
       this.store,
       RESTORED_CACHE_ANALYZER,
     );
-    if (!titles.restore(cached.titles)) return;
+    if (!titles.restore(cached.titles, { consume: true })) return;
     const body = new BodyTokenIndex(
       this.app,
       RESTORED_CACHE_ANALYZER,
@@ -483,13 +485,20 @@ export default class RelatedNotesPlugin extends Plugin {
     );
     if (
       this.settings.bodyTokenEnabled &&
-      !body.restore(cached.bodies, this.settings.bodyTokenTopN)
+      !body.restore(cached.bodies, this.settings.bodyTokenTopN, {
+        consume: true,
+      })
     ) {
       return;
     }
+    if (!this.settings.bodyTokenEnabled) cached.bodies.length = 0;
     this.titles = titles;
     this.body = body;
     this.scoring.attachCachedMorphology(body, titles);
+    // The live Maps now own all restored data. The consumed arrays are no
+    // longer needed while the heavier analyzer initializes in the background.
+    this.loadedMorphologyCache = undefined;
+    this.restoredMorphologyCache = true;
   }
 
   // Wires up the cache layers once: metadata, titles, then bodies. The order

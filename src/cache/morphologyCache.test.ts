@@ -31,6 +31,24 @@ describe("morphology cache", () => {
     ).toBe(false);
   });
 
+  it("rejects malformed entries before restore starts consuming them", () => {
+    const cache = {
+      version: MORPHOLOGY_CACHE_VERSION,
+      signature: morphologyCacheSignature(DEFAULT_SETTINGS.customVocabulary),
+      titles: [{ path: "valid.md", tokens: ["valid"] }],
+      bodies: [
+        {
+          path: "broken.md",
+          mtime: 1,
+          size: 1,
+          tokens: [["token", 0]],
+        },
+      ],
+    };
+
+    expect(isUsableMorphologyCache(cache, DEFAULT_SETTINGS)).toBe(false);
+  });
+
   it("reuses a cache left in an earlier data.json", () => {
     const legacy = {
       settings: DEFAULT_SETTINGS,

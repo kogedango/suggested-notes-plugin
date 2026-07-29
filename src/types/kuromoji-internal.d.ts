@@ -1,6 +1,6 @@
 declare module "*.dat.gz" {
-  const bytes: Uint8Array;
-  export default bytes;
+  const take: () => Uint8Array;
+  export default take;
 }
 
 declare module "kuromoji/src/dict/DynamicDictionaries" {

@@ -2,18 +2,18 @@ import type { IpadicFeatures, Tokenizer as KuromojiTokenizer } from "kuromoji";
 import DynamicDictionaries from "kuromoji/src/dict/DynamicDictionaries";
 import Tokenizer from "kuromoji/src/Tokenizer";
 import { Zlib } from "zlibjs/bin/gunzip.min.js";
-import baseGzip from "kuromoji/dict/base.dat.gz";
-import ccGzip from "kuromoji/dict/cc.dat.gz";
-import checkGzip from "kuromoji/dict/check.dat.gz";
-import tidGzip from "kuromoji/dict/tid.dat.gz";
-import tidMapGzip from "kuromoji/dict/tid_map.dat.gz";
-import tidPosGzip from "kuromoji/dict/tid_pos.dat.gz";
-import unkGzip from "kuromoji/dict/unk.dat.gz";
-import unkCharGzip from "kuromoji/dict/unk_char.dat.gz";
-import unkCompatGzip from "kuromoji/dict/unk_compat.dat.gz";
-import unkInvokeGzip from "kuromoji/dict/unk_invoke.dat.gz";
-import unkMapGzip from "kuromoji/dict/unk_map.dat.gz";
-import unkPosGzip from "kuromoji/dict/unk_pos.dat.gz";
+import takeBaseGzip from "kuromoji/dict/base.dat.gz";
+import takeCcGzip from "kuromoji/dict/cc.dat.gz";
+import takeCheckGzip from "kuromoji/dict/check.dat.gz";
+import takeTidGzip from "kuromoji/dict/tid.dat.gz";
+import takeTidMapGzip from "kuromoji/dict/tid_map.dat.gz";
+import takeTidPosGzip from "kuromoji/dict/tid_pos.dat.gz";
+import takeUnkGzip from "kuromoji/dict/unk.dat.gz";
+import takeUnkCharGzip from "kuromoji/dict/unk_char.dat.gz";
+import takeUnkCompatGzip from "kuromoji/dict/unk_compat.dat.gz";
+import takeUnkInvokeGzip from "kuromoji/dict/unk_invoke.dat.gz";
+import takeUnkMapGzip from "kuromoji/dict/unk_map.dat.gz";
+import takeUnkPosGzip from "kuromoji/dict/unk_pos.dat.gz";
 import {
   compactDoubleArrayBuffers,
   compactInvokeDefinitions,
@@ -27,52 +27,58 @@ import { KuromojiJapaneseAnalyzer } from "./japanese";
 // Notices for the Kuromoji code and IPADIC data bundled through these imports
 // are emitted into main.js by esbuild's banner. See scripts/licenses.mjs.
 
-export async function createJapaneseAnalyzer(): Promise<KuromojiJapaneseAnalyzer> {
+let japaneseAnalyzerPromise: Promise<KuromojiJapaneseAnalyzer> | undefined;
+
+export function createJapaneseAnalyzer(): Promise<KuromojiJapaneseAnalyzer> {
+  japaneseAnalyzerPromise ??= buildJapaneseAnalyzer();
+  return japaneseAnalyzerPromise;
+}
+
+async function buildJapaneseAnalyzer(): Promise<KuromojiJapaneseAnalyzer> {
   await yieldToEventLoop();
   const dictionaries = new DynamicDictionaries();
   const trie = compactDoubleArrayBuffers(
-    decompressInt32(baseGzip),
-    decompressInt32(checkGzip),
+    decompressInt32(takeBaseGzip()),
+    decompressInt32(takeCheckGzip()),
   );
   dictionaries.loadTrie(trie.base, trie.check);
 
-  const tokenTargetMap = compactTargetMap(decompress(tidMapGzip));
+  const tokenTargetMap = compactTargetMap(decompress(takeTidMapGzip()));
   // Compact the record buffer before decompressing the much larger feature
   // buffer. This keeps both raw builder allocations from being live during
   // the copy.
   const tokenDictionary = compactTokenInfoDictionary(
-    decompress(tidGzip),
+    decompress(takeTidGzip()),
     tokenTargetMap,
   );
-  const tokenFeatures = compactTokenInfoFeatures(
-    tokenDictionary,
-    decompress(tidPosGzip),
-    tokenTargetMap,
-  );
+  // Compacting this 40 MB file would allocate another 34.36 MB merely to
+  // reclaim 5.64 MB. Retain the original buffer so mobile startup avoids the
+  // much larger transient copy.
+  const tokenFeatures = decompress(takeTidPosGzip());
   dictionaries.loadTokenInfoDictionaries(
     tokenDictionary,
     tokenFeatures,
     tokenTargetMap,
   );
-  dictionaries.loadConnectionCosts(decompressInt16(ccGzip));
+  dictionaries.loadConnectionCosts(decompressInt16(takeCcGzip()));
 
-  const unknownTargetMap = compactTargetMap(decompress(unkMapGzip));
+  const unknownTargetMap = compactTargetMap(decompress(takeUnkMapGzip()));
   const unknownDictionary = compactTokenInfoDictionary(
-    decompress(unkGzip),
+    decompress(takeUnkGzip()),
     unknownTargetMap,
   );
   const unknownFeatures = compactTokenInfoFeatures(
     unknownDictionary,
-    decompress(unkPosGzip),
+    decompress(takeUnkPosGzip()),
     unknownTargetMap,
   );
   dictionaries.loadUnknownDictionaries(
     unknownDictionary,
     unknownFeatures,
     unknownTargetMap,
-    decompress(unkCharGzip),
-    compactTrailingZeroUint32(decompressUint32(unkCompatGzip)),
-    compactInvokeDefinitions(decompress(unkInvokeGzip)),
+    decompress(takeUnkCharGzip()),
+    compactTrailingZeroUint32(decompressUint32(takeUnkCompatGzip())),
+    compactInvokeDefinitions(decompress(takeUnkInvokeGzip())),
   );
   return new KuromojiJapaneseAnalyzer(
     new Tokenizer(dictionaries) as KuromojiTokenizer<IpadicFeatures>,

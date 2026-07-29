@@ -2,6 +2,7 @@ import esbuild from "esbuild";
 import fs from "node:fs";
 import process from "process";
 import builtins from "builtin-modules";
+import { embeddedGzipPlugin } from "./scripts/embedded-gzip.mjs";
 import {
   assertBundledPackages,
   bannerFrom,
@@ -42,9 +43,7 @@ const ctx = await esbuild.context({
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
-  loader: {
-    ".gz": "binary",
-  },
+  plugins: [embeddedGzipPlugin],
   outfile: "main.js",
   minify: prod,
 });
