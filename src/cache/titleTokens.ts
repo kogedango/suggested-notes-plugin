@@ -64,7 +64,11 @@ export class TitleTokenIndex {
           nextTokens.set(
             path,
             cached
-              ? new Set(cached)
+              // Per-note sets are immutable after insertion; add/remove/rename
+              // replace outer-map entries instead of changing these sets.
+              // Sharing unchanged sets avoids doubling the title corpus during
+              // the atomic synchronization pass.
+              ? cached
               : new Set(this.analyzer.tokenize(basename(path)).keys()),
           );
         }

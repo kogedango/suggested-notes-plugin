@@ -97,7 +97,9 @@ describe("TitleTokenIndex", () => {
     expect(
       index.restore([{ path: "Cached.md", tokens: ["cached"] }]),
     ).toBe(true);
+    const restoredTokens = index.tokensFor("Cached.md");
 
     expect(await index.syncAll()).toBe(false);
+    expect(index.tokensFor("Cached.md")).toBe(restoredTokens);
   });
 });

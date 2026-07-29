@@ -178,8 +178,20 @@ describe("BodyTokenIndex", () => {
         40,
       ),
     ).toBe(true);
+    const restoredCounts = (
+      index as unknown as {
+        counts: Map<string, Map<string, number>>;
+      }
+    ).counts.get("cached.md");
 
     expect(await index.syncAll(40)).toBe(false);
+    expect(
+      (
+        index as unknown as {
+          counts: Map<string, Map<string, number>>;
+        }
+      ).counts.get("cached.md"),
+    ).toBe(restoredCounts);
   });
 
   it("reports paths removed from a restored body cache", async () => {

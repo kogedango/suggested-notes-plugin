@@ -203,7 +203,11 @@ export class BodyTokenIndex {
               cachedStamp?.mtime === stamp.mtime &&
               cachedStamp.size === stamp.size
             ) {
-              nextCounts.set(file.path, new Map(cached));
+              // Per-note maps are replaced, never mutated, by incremental
+              // updates. Reuse an unchanged map instead of duplicating the
+              // entire restored corpus while the atomic outer-map swap is in
+              // progress.
+              nextCounts.set(file.path, cached);
               nextStamps.set(file.path, stamp);
               return;
             }

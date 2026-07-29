@@ -402,6 +402,7 @@ export default class RelatedNotesPlugin extends Plugin {
       );
       if (this.unloaded) return;
 
+      const hadLoadedMorphologyCache = !!this.loadedMorphologyCache;
       const hadRestoredIndexes = !!this.titles;
       const titles =
         this.titles ?? new TitleTokenIndex(this.store, analyzer);
@@ -426,6 +427,11 @@ export default class RelatedNotesPlugin extends Plugin {
           body.restore(cached.bodies, this.settings.bodyTokenTopN);
         }
       }
+      // The serialized arrays are only an input to restore. From here on the
+      // live indexes can produce the next snapshot themselves, so retaining
+      // the loaded object would keep a second vault-sized representation in
+      // memory for the rest of the session.
+      this.loadedMorphologyCache = undefined;
       this.morphologyReady = true;
       // A restored corpus is usable immediately. Render it before checking
       // file stamps and analyzing only changed/new notes in the background.
@@ -445,7 +451,7 @@ export default class RelatedNotesPlugin extends Plugin {
       if (
         titlesChanged ||
         bodiesChanged ||
-        !this.loadedMorphologyCache
+        !hadLoadedMorphologyCache
       ) {
         this.markMorphologyCacheDirty();
       }
@@ -604,7 +610,6 @@ export default class RelatedNotesPlugin extends Plugin {
           this.morphologyCachePath,
           cache,
         );
-        this.loadedMorphologyCache = cache;
         // The copy inside an earlier data.json is redundant only once the cache
         // file itself is on disk.
         if (this.legacyCacheInDataJson) await this.saveData(this.settings);

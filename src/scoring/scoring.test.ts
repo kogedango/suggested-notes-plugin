@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TokenCounter } from "../analysis/types";
 import type { BodyTokenIndex } from "../cache/bodyTokens";
 import { InvertedIndex } from "../cache/inverted";
@@ -592,6 +592,39 @@ describe("ScoringEngine.score — content tokens", () => {
       new Set(["alpha"]),
     );
     expect(results[0].reasons.sharedContentTokens).toEqual(["alpha"]);
+  });
+
+  it("rejects a common content token before reading its posting lists", () => {
+    const snaps = [
+      snap("Common.md"),
+      snap("First.md"),
+      snap("Second.md"),
+      snap("Third.md"),
+    ];
+    const store = new SnapshotStore();
+    store.rebuildAll(snaps);
+    const inverted = new InvertedIndex(store);
+    inverted.rebuild();
+    const titles = new TitleTokenIndex(store, words);
+    for (const snapshot of store.all()) titles.add(snapshot.path);
+    const titlePostings = vi.spyOn(titles, "filesWithToken");
+    const bodyPostings = vi.fn(() => new Set<string>());
+    const body = {
+      isBuilt: () => true,
+      salientFor: () => NO_TOKENS,
+      filesWithToken: bodyPostings,
+      notesWithTokenCount: () => snaps.length,
+    } as unknown as BodyTokenIndex;
+    const scoring = new ScoringEngine(store, inverted, body, titles, words);
+
+    scoring.score(
+      "Common.md",
+      settings({ bodyTokenEnabled: true }),
+      NO_TOKENS,
+    );
+
+    expect(titlePostings).not.toHaveBeenCalled();
+    expect(bodyPostings).not.toHaveBeenCalled();
   });
 });
 

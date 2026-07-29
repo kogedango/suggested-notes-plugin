@@ -14,6 +14,13 @@ import unkCompatGzip from "kuromoji/dict/unk_compat.dat.gz";
 import unkInvokeGzip from "kuromoji/dict/unk_invoke.dat.gz";
 import unkMapGzip from "kuromoji/dict/unk_map.dat.gz";
 import unkPosGzip from "kuromoji/dict/unk_pos.dat.gz";
+import {
+  compactDoubleArrayBuffers,
+  compactInvokeDefinitions,
+  compactTargetMap,
+  compactTokenInfoBuffers,
+  compactTrailingZeroUint32,
+} from "./dictionaryBuffers";
 import { KuromojiJapaneseAnalyzer } from "./japanese";
 
 // Notices for the Kuromoji code and IPADIC data bundled through these imports
@@ -22,23 +29,38 @@ import { KuromojiJapaneseAnalyzer } from "./japanese";
 export async function createJapaneseAnalyzer(): Promise<KuromojiJapaneseAnalyzer> {
   await yieldToEventLoop();
   const dictionaries = new DynamicDictionaries();
-  dictionaries.loadTrie(
+  const trie = compactDoubleArrayBuffers(
     decompressInt32(baseGzip),
     decompressInt32(checkGzip),
   );
-  dictionaries.loadTokenInfoDictionaries(
+  dictionaries.loadTrie(trie.base, trie.check);
+
+  const tokenTargetMap = compactTargetMap(decompress(tidMapGzip));
+  const tokenInfo = compactTokenInfoBuffers(
     decompress(tidGzip),
     decompress(tidPosGzip),
-    decompress(tidMapGzip),
+    tokenTargetMap,
+  );
+  dictionaries.loadTokenInfoDictionaries(
+    tokenInfo.dictionary,
+    tokenInfo.features,
+    tokenTargetMap,
   );
   dictionaries.loadConnectionCosts(decompressInt16(ccGzip));
-  dictionaries.loadUnknownDictionaries(
+
+  const unknownTargetMap = compactTargetMap(decompress(unkMapGzip));
+  const unknownInfo = compactTokenInfoBuffers(
     decompress(unkGzip),
     decompress(unkPosGzip),
-    decompress(unkMapGzip),
+    unknownTargetMap,
+  );
+  dictionaries.loadUnknownDictionaries(
+    unknownInfo.dictionary,
+    unknownInfo.features,
+    unknownTargetMap,
     decompress(unkCharGzip),
-    decompressUint32(unkCompatGzip),
-    decompress(unkInvokeGzip),
+    compactTrailingZeroUint32(decompressUint32(unkCompatGzip)),
+    compactInvokeDefinitions(decompress(unkInvokeGzip)),
   );
   return new KuromojiJapaneseAnalyzer(
     new Tokenizer(dictionaries) as KuromojiTokenizer<IpadicFeatures>,

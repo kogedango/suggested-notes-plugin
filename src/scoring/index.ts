@@ -177,7 +177,6 @@ export class ScoringEngine {
       const total = this.store.size();
       for (const tok of activeContentTokens) {
         if (excludedContent.has(tok)) continue;
-        const files = this.filesWithContentToken(tok, useBody);
         const df = this.contentDocumentFrequency(tok, useBody);
         contentIdf.set(
           tok,
@@ -189,7 +188,12 @@ export class ScoringEngine {
         ) {
           continue;
         }
-        addCandidates(files);
+        // Do not materialize a merged posting list: both sources are only
+        // iterated, and the candidates Set already performs the union.
+        addCandidates(this.titles?.filesWithToken(tok) ?? EMPTY_TOKENS);
+        if (useBody) {
+          addCandidates(this.body?.filesWithToken(tok) ?? EMPTY_TOKENS);
+        }
       }
     }
 
@@ -310,7 +314,7 @@ export class ScoringEngine {
     b: FileSnapshot,
     excludedTags: Set<string>,
     excludedLinks: Set<string>,
-    activeContentTokens: Set<string>,
+    activeContentTokens: ReadonlySet<string>,
     excludedContent: Set<string>,
     useBody: boolean,
     mentionedTitlePaths: ReadonlySet<string>,
@@ -331,13 +335,19 @@ export class ScoringEngine {
     }
     const sharedContentTokens: string[] = [];
     if (activeContentTokens.size > 0) {
-      const candidateTokens = this.contentTokensFor(
-        b.path,
-        useBody ? this.body?.salientFor(b.path) ?? EMPTY_TOKENS : EMPTY_TOKENS,
-      );
+      const candidateTitleTokens =
+        this.titles?.tokensFor(b.path) ?? EMPTY_TOKENS;
+      const candidateBodyTokens = useBody
+        ? this.body?.salientFor(b.path) ?? EMPTY_TOKENS
+        : EMPTY_TOKENS;
       for (const tok of activeContentTokens) {
         if (excludedContent.has(tok)) continue;
-        if (candidateTokens.has(tok)) sharedContentTokens.push(tok);
+        if (
+          candidateTitleTokens.has(tok) ||
+          candidateBodyTokens.has(tok)
+        ) {
+          sharedContentTokens.push(tok);
+        }
       }
     }
     // Only asymmetric links represent a link-back opportunity.
@@ -383,20 +393,10 @@ export class ScoringEngine {
   private contentTokensFor(
     path: string,
     bodyTokens: ReadonlySet<string>,
-  ): Set<string> {
+  ): ReadonlySet<string> {
     const titleTokens = this.titles?.tokensFor(path) ?? EMPTY_TOKENS;
-    if (bodyTokens.size === 0) return new Set(titleTokens);
+    if (bodyTokens.size === 0) return titleTokens;
     return new Set([...titleTokens, ...bodyTokens]);
-  }
-
-  private filesWithContentToken(token: string, useBody: boolean): Set<string> {
-    const files = new Set(this.titles?.filesWithToken(token) ?? EMPTY_TOKENS);
-    if (useBody) {
-      for (const path of this.body?.filesWithToken(token) ?? EMPTY_TOKENS) {
-        files.add(path);
-      }
-    }
-    return files;
   }
 
   private contentDocumentFrequency(token: string, useBody: boolean): number {
