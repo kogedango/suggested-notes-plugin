@@ -18,7 +18,8 @@ import {
   compactDoubleArrayBuffers,
   compactInvokeDefinitions,
   compactTargetMap,
-  compactTokenInfoBuffers,
+  compactTokenInfoDictionary,
+  compactTokenInfoFeatures,
   compactTrailingZeroUint32,
 } from "./dictionaryBuffers";
 import { KuromojiJapaneseAnalyzer } from "./japanese";
@@ -36,27 +37,38 @@ export async function createJapaneseAnalyzer(): Promise<KuromojiJapaneseAnalyzer
   dictionaries.loadTrie(trie.base, trie.check);
 
   const tokenTargetMap = compactTargetMap(decompress(tidMapGzip));
-  const tokenInfo = compactTokenInfoBuffers(
+  // Compact the record buffer before decompressing the much larger feature
+  // buffer. This keeps both raw builder allocations from being live during
+  // the copy.
+  const tokenDictionary = compactTokenInfoDictionary(
     decompress(tidGzip),
+    tokenTargetMap,
+  );
+  const tokenFeatures = compactTokenInfoFeatures(
+    tokenDictionary,
     decompress(tidPosGzip),
     tokenTargetMap,
   );
   dictionaries.loadTokenInfoDictionaries(
-    tokenInfo.dictionary,
-    tokenInfo.features,
+    tokenDictionary,
+    tokenFeatures,
     tokenTargetMap,
   );
   dictionaries.loadConnectionCosts(decompressInt16(ccGzip));
 
   const unknownTargetMap = compactTargetMap(decompress(unkMapGzip));
-  const unknownInfo = compactTokenInfoBuffers(
+  const unknownDictionary = compactTokenInfoDictionary(
     decompress(unkGzip),
+    unknownTargetMap,
+  );
+  const unknownFeatures = compactTokenInfoFeatures(
+    unknownDictionary,
     decompress(unkPosGzip),
     unknownTargetMap,
   );
   dictionaries.loadUnknownDictionaries(
-    unknownInfo.dictionary,
-    unknownInfo.features,
+    unknownDictionary,
+    unknownFeatures,
     unknownTargetMap,
     decompress(unkCharGzip),
     compactTrailingZeroUint32(decompressUint32(unkCompatGzip)),

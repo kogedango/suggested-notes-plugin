@@ -89,7 +89,7 @@ export class ScoringEngine {
   score(
     activePath: string,
     settings: PluginSettings,
-    activeBodyTokens: Set<string>,
+    activeBodyTokens: ReadonlySet<string>,
     activeBodyText = "",
   ): ScoreResult {
     const active = this.store.get(activePath);

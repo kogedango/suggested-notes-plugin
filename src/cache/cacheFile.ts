@@ -14,6 +14,7 @@ export const MORPHOLOGY_CACHE_FILENAME = "morphology-cache.json";
 export interface CacheFileAdapter {
   read(path: string): Promise<string>;
   write(path: string, data: string): Promise<void>;
+  append(path: string, data: string): Promise<void>;
   exists(path: string): Promise<boolean>;
 }
 
@@ -56,4 +57,46 @@ export async function writeMorphologyCacheFile(
   cache: MorphologyCacheSnapshot,
 ): Promise<void> {
   await adapter.write(path, JSON.stringify(cache));
+}
+
+const CACHE_WRITE_CHUNK_SIZE = 256 * 1024;
+
+export async function writeMorphologyCacheFileStreaming(
+  adapter: CacheFileAdapter,
+  path: string,
+  header: Pick<MorphologyCacheSnapshot, "version" | "signature">,
+  titles: Iterable<MorphologyCacheSnapshot["titles"][number]>,
+  bodies: Iterable<MorphologyCacheSnapshot["bodies"][number]>,
+): Promise<void> {
+  await adapter.write(
+    path,
+    `{"version":${JSON.stringify(header.version)},"signature":${JSON.stringify(header.signature)},"titles":[`,
+  );
+  await appendJsonArray(adapter, path, titles);
+  await adapter.append(path, `],"bodies":[`);
+  await appendJsonArray(adapter, path, bodies);
+  await adapter.append(path, "]}");
+}
+
+async function appendJsonArray(
+  adapter: CacheFileAdapter,
+  path: string,
+  values: Iterable<unknown>,
+): Promise<void> {
+  let chunk = "";
+  let first = true;
+  for (const value of values) {
+    const json = `${first ? "" : ","}${JSON.stringify(value)}`;
+    first = false;
+    if (chunk && chunk.length + json.length > CACHE_WRITE_CHUNK_SIZE) {
+      await adapter.append(path, chunk);
+      chunk = "";
+    }
+    if (json.length > CACHE_WRITE_CHUNK_SIZE) {
+      await adapter.append(path, json);
+    } else {
+      chunk += json;
+    }
+  }
+  if (chunk) await adapter.append(path, chunk);
 }

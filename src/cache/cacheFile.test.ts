@@ -5,6 +5,7 @@ import {
   morphologyCachePath,
   readMorphologyCacheFile,
   writeMorphologyCacheFile,
+  writeMorphologyCacheFileStreaming,
   type CacheFileAdapter,
 } from "./cacheFile";
 import {
@@ -28,6 +29,9 @@ function adapter(files: Record<string, string> = {}): CacheFileAdapter & {
     async write(path, data) {
       files[path] = data;
     },
+    async append(path, data) {
+      files[path] = (files[path] ?? "") + data;
+    },
   };
 }
 
@@ -45,6 +49,22 @@ describe("morphology cache file", () => {
     const fs = adapter();
     const path = "plugin/morphology-cache.json";
     await writeMorphologyCacheFile(fs, path, cache);
+
+    expect(await readMorphologyCacheFile(fs, path, DEFAULT_SETTINGS)).toEqual(
+      cache,
+    );
+  });
+
+  it("round-trips entries written incrementally", async () => {
+    const fs = adapter();
+    const path = "plugin/morphology-cache.json";
+    await writeMorphologyCacheFileStreaming(
+      fs,
+      path,
+      { version: cache.version, signature: cache.signature },
+      cache.titles.values(),
+      cache.bodies.values(),
+    );
 
     expect(await readMorphologyCacheFile(fs, path, DEFAULT_SETTINGS)).toEqual(
       cache,

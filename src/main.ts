@@ -14,6 +14,7 @@ import {
   morphologyCachePath,
   readMorphologyCacheFile,
   writeMorphologyCacheFile,
+  writeMorphologyCacheFileStreaming,
 } from "./cache/cacheFile";
 import {
   MORPHOLOGY_CACHE_VERSION,
@@ -602,14 +603,38 @@ export default class RelatedNotesPlugin extends Plugin {
     if (!force && !this.morphologyCacheDirty) return Promise.resolve();
     this.morphologyCacheDirty = false;
     const write = async () => {
-      const cache = this.currentMorphologyCache();
-      if (!cache) return;
+      const signature = morphologyCacheSignature(
+        this.settings.customVocabulary,
+      );
+      const liveIndexes =
+        this.titles &&
+        this.body &&
+        this.analysisSignature === signature
+          ? { titles: this.titles, body: this.body }
+          : undefined;
+      const loadedCache = liveIndexes
+        ? undefined
+        : this.loadedMorphologyCacheForWrite();
+      if (!liveIndexes && !loadedCache) return;
       try {
-        await writeMorphologyCacheFile(
-          this.app.vault.adapter,
-          this.morphologyCachePath,
-          cache,
-        );
+        if (liveIndexes) {
+          await writeMorphologyCacheFileStreaming(
+            this.app.vault.adapter,
+            this.morphologyCachePath,
+            {
+              version: MORPHOLOGY_CACHE_VERSION,
+              signature,
+            },
+            liveIndexes.titles.snapshotEntries(),
+            liveIndexes.body.snapshotEntries(),
+          );
+        } else if (loadedCache) {
+          await writeMorphologyCacheFile(
+            this.app.vault.adapter,
+            this.morphologyCachePath,
+            loadedCache,
+          );
+        }
         // The copy inside an earlier data.json is redundant only once the cache
         // file itself is on disk.
         if (this.legacyCacheInDataJson) await this.saveData(this.settings);
@@ -627,22 +652,7 @@ export default class RelatedNotesPlugin extends Plugin {
     return queued;
   }
 
-  private currentMorphologyCache(): MorphologyCacheSnapshot | undefined {
-    const expectedSignature = morphologyCacheSignature(
-      this.settings.customVocabulary,
-    );
-    if (
-      this.titles &&
-      this.body &&
-      this.analysisSignature === expectedSignature
-    ) {
-      return {
-        version: MORPHOLOGY_CACHE_VERSION,
-        signature: expectedSignature,
-        titles: this.titles.snapshot(),
-        bodies: this.body.snapshot(),
-      };
-    }
+  private loadedMorphologyCacheForWrite(): MorphologyCacheSnapshot | undefined {
     return isUsableMorphologyCache(
       this.loadedMorphologyCache,
       this.settings,

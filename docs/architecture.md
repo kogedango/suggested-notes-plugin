@@ -261,15 +261,15 @@ tokenization is also weak here, because the discarded regions are unreachable by
 construction and a deliberately corrupted length still tokenizes ordinary text
 identically.
 
-Compaction lowers steady state and raises peak. While
-`compactTokenInfoBuffers` runs, the decompressed source and its copy are both
-reachable, so the peak moves from about 95.6 MB to about 102 MB. The trade is
-worth it overall, but it is not uniform: `tid_pos.dat` spends 34.36 MB of
-transient allocation to reclaim 5.64 MB, and passing that one buffer through
-unchanged would trade a 5.6 MB larger steady state for a roughly 34 MB lower
-peak. Nesting `decompress` calls inside the compaction call is what keeps the
-sources reachable; sequential statements would lower the peak without changing
-the steady state.
+Compaction lowers steady state but each copy temporarily overlaps its
+decompressed source. Token-info records are therefore compacted before the
+larger feature buffer is decompressed; feature offsets are then read from that
+small retained record copy. The raw `tid.dat`/`unk.dat` allocations are no
+longer referenced when their corresponding raw feature allocations are created.
+
+The trade is still not uniform: `tid_pos.dat` spends 34.36 MB of transient
+allocation to reclaim 5.64 MB, and passing that one buffer through unchanged
+would trade a 5.6 MB larger steady state for a roughly 34 MB lower copy peak.
 
 ### Index token maps
 
@@ -289,6 +289,19 @@ Tests should assert the invariant, not the sharing. Identity assertions after
 `add`, `remove`, and `rename` and then checks that a previously returned set is
 unchanged does not.
 
+Asynchronous body refreshes use one opaque ticket per path currently being
+read. A newer refresh replaces the ticket, while delete, rename, clear, and
+restore remove it; completion and failure remove their own ticket as well.
+Stale reads therefore remain unable to overwrite newer state without retaining
+one revision entry for every historical path.
+
+`BodyTokenIndex.recompute` is synchronous. It clears and refills the existing
+raw, salient, and posting maps after the replacement counts are ready, releasing
+old posting sets before allocating new ones. Previously it constructed three
+complete replacement maps while the old three were still retained. The
+per-note sets themselves remain immutable: clearing a containing map does not
+mutate a set already returned to a caller.
+
 ### The loaded cache snapshot
 
 `loadedMorphologyCache` holds the deserialized cache and is only an input to
@@ -298,6 +311,19 @@ would hold a second vault-sized representation for the session. The
 `currentMorphologyCache` fallback that read it required a matching vocabulary
 signature, which no longer holds once the live indexes have diverged, so
 releasing it changes no behaviour.
+
+### Cache serialization
+
+Live indexes are serialized through entry iterators rather than first calling
+`snapshot()` for the complete Vault. The writer truncates the cache with its
+header, then appends title and body entries in chunks of approximately 256 KB.
+At most one note's token array, its JSON representation, and the current output
+chunk need to be materialized in addition to the live indexes.
+
+An interrupted write can leave a truncated file, just as an interrupted
+whole-file write could. The cache remains non-authoritative: parsing rejects
+that file on the next start and synchronization rebuilds it. Writes are queued,
+so two flushes cannot interleave their chunks.
 
 ### Analysis temporaries
 
@@ -331,34 +357,23 @@ plugin-folder assets would do it, at the cost of the single self-contained
 `main.js` that the licensing and distribution rules depend on. This is now the
 largest single steady-state item and the least convenient to remove.
 
-**Cache serialization holds three representations — transient, scales with the
-Vault.** `flushMorphologyCache` calls `snapshot()` on both indexes, which
-materializes every per-note map as a fresh array, and then hands the result to
-`JSON.stringify`. The live indexes, the snapshot arrays, and the JSON string are
-all reachable at that moment. Reading is the same shape in reverse:
-`adapter.read` returns the whole file as one string, `JSON.parse` builds the
-whole object, and `restore` then builds the Maps. This is the largest memory
-event after startup, and unlike the startup dictionary peak it recurs on every
-periodic flush. Reducing it means streaming or chunking the cache format, which
-trades against the "written whole, nothing authoritative" property that makes a
-truncated file safe to discard.
+**Cache restore still holds three representations — transient, scales with the
+Vault.** `adapter.read` returns the whole file as one string, `JSON.parse` builds
+the complete snapshot object, and `restore` then builds the Maps. The streaming
+writer removes the equivalent recurring save-side peak, but reducing the
+cold-start read peak needs an incremental JSON parser or a different chunked
+cache format. That adds format and recovery complexity to data that is only a
+rebuildable optimization.
 
 **`tid_pos.dat` compaction is a poor peak/steady trade.** Covered above: 34.36 MB
 transient to reclaim 5.64 MB. Passing that one buffer through uncompacted is a
 single-line change if peak turns out to matter more than steady state.
 
-**Index rebuilds duplicate the token → paths sets.** `BodyTokenIndex.recompute`
-and `TitleTokenIndex.replaceTokens` construct a complete new inverted index while
-the old one is still live. The per-note entries are shared after the change
-described under Index token maps, but the inverted and salient maps are not, so a
-rebuild still holds two copies of that structure.
-
-**`BodyTokenIndex.pathRevisions` never drops entries.** `remove` and `rename`
-bump the revision for a path and delete its counts and stamps, but leave the
-revision entry behind. One small entry per path ever touched, growing without
-bound across a session. Pruning is safe only where no read for that path is in
-flight, which is what the revision exists to detect — so the fix belongs with the
-in-flight bookkeeping, not with `remove`.
+**Title index rebuilds duplicate the token → paths sets.**
+`TitleTokenIndex.rebuildAll` yields between batches, so its old inverted index
+must remain queryable until the replacement is complete. It therefore still
+holds old and new posting sets during a rebuild. Unlike the body recompute above,
+mutating it in place would expose a partially rebuilt index between yields.
 
 ## Content field and scoring
 

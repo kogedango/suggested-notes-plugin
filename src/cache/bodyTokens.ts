@@ -32,7 +32,10 @@ export class BodyTokenIndex {
   private built = false;
   private generation = 0;
   private topN = 40;
-  private pathRevisions = new Map<string, number>();
+  // Only paths with a cachedRead currently in flight are retained. Replacing
+  // or deleting a ticket invalidates that read without leaving a permanent
+  // tombstone for every path touched during the session.
+  private inFlightReads = new Map<string, object>();
 
   constructor(
     private app: App,
@@ -51,7 +54,7 @@ export class BodyTokenIndex {
     this.generation++;
     this.counts = new Map();
     this.stamps = new Map();
-    this.pathRevisions = new Map();
+    this.inFlightReads.clear();
     this.salient = new Map();
     this.inverted = new Map();
     this.rawInverted = new Map();
@@ -65,11 +68,11 @@ export class BodyTokenIndex {
     return this.built;
   }
 
-  salientFor(path: string): Set<string> {
+  salientFor(path: string): ReadonlySet<string> {
     return this.salient.get(path) ?? EMPTY;
   }
 
-  filesWithToken(token: string): Set<string> {
+  filesWithToken(token: string): ReadonlySet<string> {
     return this.inverted.get(token) ?? EMPTY;
   }
 
@@ -100,12 +103,21 @@ export class BodyTokenIndex {
   async refreshNote(file: TFile, topN: number): Promise<void> {
     if (!this.built) return;
     const path = file.path;
-    const revision = (this.pathRevisions.get(path) ?? 0) + 1;
-    this.pathRevisions.set(path, revision);
-    const body = await this.app.vault.cachedRead(file);
+    const ticket = {};
+    this.inFlightReads.set(path, ticket);
+    let body: string;
+    try {
+      body = await this.app.vault.cachedRead(file);
+    } catch (error) {
+      if (this.inFlightReads.get(path) === ticket) {
+        this.inFlightReads.delete(path);
+      }
+      throw error;
+    }
     // A later save, delete, or rename superseded this read while it was in
     // flight. Let that operation own the cache entry.
-    if (this.pathRevisions.get(path) !== revision) return;
+    if (this.inFlightReads.get(path) !== ticket) return;
+    this.inFlightReads.delete(path);
     this.generation++;
     const nextCounts = this.analyzer.tokenize(body);
     this.stamps.set(path, stampOf(file));
@@ -121,8 +133,8 @@ export class BodyTokenIndex {
 
   rename(oldPath: string, newPath: string): void {
     this.generation++;
-    this.bumpPathRevision(oldPath);
-    this.bumpPathRevision(newPath);
+    this.inFlightReads.delete(oldPath);
+    this.inFlightReads.delete(newPath);
     const counts = this.counts.get(oldPath);
     const stamp = this.stamps.get(oldPath);
     this.counts.delete(oldPath);
@@ -134,7 +146,7 @@ export class BodyTokenIndex {
 
   remove(path: string): void {
     this.generation++;
-    this.bumpPathRevision(path);
+    this.inFlightReads.delete(path);
     const removed = this.counts.delete(path);
     this.stamps.delete(path);
     if (removed && this.built) this.recompute(this.topN);
@@ -149,6 +161,7 @@ export class BodyTokenIndex {
       nextCounts.set(entry.path, new Map(entry.tokens));
       nextStamps.set(entry.path, { mtime: entry.mtime, size: entry.size });
     }
+    this.inFlightReads.clear();
     this.counts = nextCounts;
     this.stamps = nextStamps;
     this.recompute(topN);
@@ -156,15 +169,19 @@ export class BodyTokenIndex {
   }
 
   snapshot(): BodyTokenCacheEntry[] {
-    return [...this.counts].map(([path, tokens]) => {
+    return [...this.snapshotEntries()];
+  }
+
+  *snapshotEntries(): IterableIterator<BodyTokenCacheEntry> {
+    for (const [path, tokens] of this.counts) {
       const stamp = this.stamps.get(path) ?? { mtime: 0, size: 0 };
-      return {
+      yield {
         path,
         mtime: stamp.mtime,
         size: stamp.size,
         tokens: [...tokens],
       };
-    });
+    }
   }
 
   rerank(topN: number): void {
@@ -241,10 +258,13 @@ export class BodyTokenIndex {
     const nextDf = new Map<string, number>(
       this.titles?.documentFrequencyEntries() ?? [],
     );
-    const nextRawInverted = new Map<string, Set<string>>();
+    // recompute is synchronous, so no query can observe these maps between
+    // clear and refill. Reuse their containers to release the old posting sets
+    // before allocating replacements instead of holding two complete indexes.
+    this.rawInverted.clear();
     for (const [path, counts] of this.counts) {
       for (const token of counts.keys()) {
-        addPathToTokenIndex(nextRawInverted, token, path);
+        addPathToTokenIndex(this.rawInverted, token, path);
         if (this.titles?.tokensFor(path).has(token)) continue;
         nextDf.set(token, (nextDf.get(token) ?? 0) + 1);
       }
@@ -254,19 +274,16 @@ export class BodyTokenIndex {
       this.counts.size,
       this.titles?.totalNotesCount() ?? 0,
     );
-    const nextSalient = new Map<string, Set<string>>();
-    const nextInverted = new Map<string, Set<string>>();
+    this.salient.clear();
+    this.inverted.clear();
     for (const [path, counts] of this.counts) {
       const selected = rankSalient(counts, topN, nextDf, totalNotes);
-      nextSalient.set(path, selected);
-      addToInverted(nextInverted, path, selected);
+      this.salient.set(path, selected);
+      addToInverted(this.inverted, path, selected);
     }
 
     this.df = nextDf;
     this.totalNotes = totalNotes;
-    this.salient = nextSalient;
-    this.inverted = nextInverted;
-    this.rawInverted = nextRawInverted;
     this.idfCache.clear();
     this.built = true;
   }
@@ -339,10 +356,6 @@ export class BodyTokenIndex {
       this.salient.set(path, selected);
       addToInverted(this.inverted, path, selected);
     }
-  }
-
-  private bumpPathRevision(path: string): void {
-    this.pathRevisions.set(path, (this.pathRevisions.get(path) ?? 0) + 1);
   }
 }
 
@@ -449,4 +462,4 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-const EMPTY: Set<string> = new Set();
+const EMPTY: ReadonlySet<string> = new Set();

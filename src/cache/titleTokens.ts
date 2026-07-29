@@ -42,10 +42,13 @@ export class TitleTokenIndex {
   }
 
   snapshot(): TitleTokenCacheEntry[] {
-    return [...this.tokens].map(([path, tokens]) => ({
-      path,
-      tokens: [...tokens],
-    }));
+    return [...this.snapshotEntries()];
+  }
+
+  *snapshotEntries(): IterableIterator<TitleTokenCacheEntry> {
+    for (const [path, tokens] of this.tokens) {
+      yield { path, tokens: [...tokens] };
+    }
   }
 
   // Reuses restored entries and analyzes only new/renamed titles. Deleted
@@ -145,11 +148,11 @@ export class TitleTokenIndex {
     this.add(newPath);
   }
 
-  tokensFor(path: string): Set<string> {
+  tokensFor(path: string): ReadonlySet<string> {
     return this.tokens.get(path) ?? EMPTY;
   }
 
-  filesWithToken(token: string): Set<string> {
+  filesWithToken(token: string): ReadonlySet<string> {
     return this.inverted.get(token) ?? EMPTY;
   }
 
@@ -220,4 +223,4 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-const EMPTY: Set<string> = new Set();
+const EMPTY: ReadonlySet<string> = new Set();

@@ -40,15 +40,46 @@ export function compactTokenInfoBuffers(
   features: Uint8Array,
   targetMap: Uint8Array,
 ): TokenInfoBuffers {
+  const compactedDictionary = compactTokenInfoDictionary(
+    dictionary,
+    targetMap,
+  );
+  return {
+    dictionary: compactedDictionary,
+    features: compactTokenInfoFeatures(
+      compactedDictionary,
+      features,
+      targetMap,
+    ),
+  };
+}
+
+export function compactTokenInfoDictionary(
+  dictionary: Uint8Array,
+  targetMap: Uint8Array,
+): Uint8Array {
   let dictionaryLength = 0;
-  let featuresLength = 0;
   visitTargetMap(targetMap, (tokenInfoId) => {
     const recordEnd = tokenInfoId + 10;
     if (tokenInfoId < 0 || recordEnd > dictionary.length) {
       throw new Error("Invalid Kuromoji token-info offset");
     }
     dictionaryLength = Math.max(dictionaryLength, recordEnd);
+  });
+  return copyUint8(dictionary, dictionaryLength);
+}
 
+export function compactTokenInfoFeatures(
+  dictionary: Uint8Array,
+  features: Uint8Array,
+  targetMap: Uint8Array,
+): Uint8Array {
+  let featuresLength = 0;
+  visitTargetMap(targetMap, (tokenInfoId) => {
+    const recordEnd = tokenInfoId + 10;
+    if (tokenInfoId < 0 || recordEnd > dictionary.length) {
+      throw new Error("Invalid Kuromoji token-info offset");
+    }
     const featureOffset = readInt32LE(dictionary, tokenInfoId + 6);
     if (featureOffset < 0 || featureOffset >= features.length) {
       throw new Error("Invalid Kuromoji feature offset");
@@ -59,11 +90,7 @@ export function compactTokenInfoBuffers(
     }
     featuresLength = Math.max(featuresLength, terminator + 1);
   });
-
-  return {
-    dictionary: copyUint8(dictionary, dictionaryLength),
-    features: copyUint8(features, featuresLength),
-  };
+  return copyUint8(features, featuresLength);
 }
 
 // TokenInfoDictionary.loadTargetMap() reads until the physical end rather than

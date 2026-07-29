@@ -46,8 +46,10 @@ describe("TitleTokenIndex", () => {
     store.rebuildAll([snapshot("Old Name.md")]);
     const index = new TitleTokenIndex(store, words);
     await index.rebuildAll();
+    const oldTokens = index.tokensFor("Old Name.md");
 
     index.rename("Old Name.md", "New Topic.md");
+    expect(oldTokens).toEqual(new Set(["old", "name"]));
     expect(index.tokensFor("Old Name.md")).toEqual(new Set());
     expect(index.tokensFor("New Topic.md")).toEqual(new Set(["new", "topic"]));
     index.remove("New Topic.md");

@@ -273,6 +273,7 @@ describe("BodyTokenIndex", () => {
 
     expect(index.salientFor("a.md")).not.toBe(affectedBefore);
     expect(index.salientFor("a.md")).toEqual(new Set());
+    expect(affectedBefore).toEqual(new Set(["shared"]));
     // A full recompute would replace every Set. Keeping this identity proves
     // the unrelated note did not get reranked.
     expect(index.salientFor("c.md")).toBe(unaffectedBefore);
@@ -314,5 +315,81 @@ describe("BodyTokenIndex", () => {
     await older;
 
     expect(index.snapshot()[0].tokens).toEqual([["newer", 1]]);
+    expect(inFlightReadCount(index)).toBe(0);
+  });
+
+  it("invalidates a pending refresh on removal without retaining a tombstone", async () => {
+    const target = file("removed.md", 1);
+    let finishRead!: (value: string) => void;
+    const app = {
+      vault: {
+        getMarkdownFiles: () => [target],
+        cachedRead: () =>
+          new Promise<string>((resolve) => {
+            finishRead = resolve;
+          }),
+      },
+    } as unknown as App;
+    const index = new BodyTokenIndex(app, words);
+    expect(
+      index.restore(
+        [
+          {
+            path: target.path,
+            mtime: 0,
+            size: 1,
+            tokens: [["initial", 1]],
+          },
+        ],
+        40,
+      ),
+    ).toBe(true);
+
+    const refresh = index.refreshNote(target, 40);
+    expect(inFlightReadCount(index)).toBe(1);
+    index.remove(target.path);
+    expect(inFlightReadCount(index)).toBe(0);
+    finishRead("stale");
+    await refresh;
+
+    expect(index.snapshot()).toEqual([]);
+    expect(inFlightReadCount(index)).toBe(0);
+  });
+
+  it("releases an in-flight ticket when reading fails", async () => {
+    const target = file("failed.md", 1);
+    const app = {
+      vault: {
+        getMarkdownFiles: () => [target],
+        cachedRead: async () => {
+          throw new Error("read failed");
+        },
+      },
+    } as unknown as App;
+    const index = new BodyTokenIndex(app, words);
+    expect(
+      index.restore(
+        [
+          {
+            path: target.path,
+            mtime: 0,
+            size: 1,
+            tokens: [["initial", 1]],
+          },
+        ],
+        40,
+      ),
+    ).toBe(true);
+
+    await expect(index.refreshNote(target, 40)).rejects.toThrow("read failed");
+    expect(inFlightReadCount(index)).toBe(0);
   });
 });
+
+function inFlightReadCount(index: BodyTokenIndex): number {
+  return (
+    index as unknown as {
+      inFlightReads: Map<string, object>;
+    }
+  ).inFlightReads.size;
+}
