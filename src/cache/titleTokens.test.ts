@@ -82,11 +82,22 @@ describe("TitleTokenIndex", () => {
     expect(
       index.restore([{ path: "Cached.md", tokens: ["cached"] }]),
     ).toBe(true);
-    await index.syncAll(1);
+    expect(await index.syncAll(1)).toBe(true);
 
     expect(calls).toEqual(["New Topic"]);
     expect(index.filesWithToken("cached")).toEqual(new Set(["Cached.md"]));
     expect(index.filesWithToken("new")).toEqual(new Set(["New Topic.md"]));
     expect(index.snapshot()).toHaveLength(2);
+  });
+
+  it("reports an unchanged restored title cache", async () => {
+    const store = new SnapshotStore();
+    store.rebuildAll([snapshot("Cached.md")]);
+    const index = new TitleTokenIndex(store, words);
+    expect(
+      index.restore([{ path: "Cached.md", tokens: ["cached"] }]),
+    ).toBe(true);
+
+    expect(await index.syncAll()).toBe(false);
   });
 });

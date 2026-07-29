@@ -132,7 +132,7 @@ describe("BodyTokenIndex", () => {
         40,
       ),
     ).toBe(true);
-    await index.syncAll(40, 1);
+    expect(await index.syncAll(40, 1)).toBe(true);
 
     expect(calls).toEqual(["shared new"]);
     expect(index.snapshot()).toEqual([
@@ -152,6 +152,60 @@ describe("BodyTokenIndex", () => {
     expect(index.filesWithToken("shared")).toEqual(
       new Set(["unchanged.md", "changed.md"]),
     );
+  });
+
+  it("reports an unchanged restored body cache", async () => {
+    const target = file("cached.md", 1, 10);
+    const app = {
+      vault: {
+        getMarkdownFiles: () => [target],
+        cachedRead: async () => {
+          throw new Error("an unchanged cache should not read the body");
+        },
+      },
+    } as unknown as App;
+    const index = new BodyTokenIndex(app, words);
+    expect(
+      index.restore(
+        [
+          {
+            path: "cached.md",
+            mtime: 1,
+            size: 10,
+            tokens: [["cached", 1]],
+          },
+        ],
+        40,
+      ),
+    ).toBe(true);
+
+    expect(await index.syncAll(40)).toBe(false);
+  });
+
+  it("reports paths removed from a restored body cache", async () => {
+    const app = {
+      vault: {
+        getMarkdownFiles: () => [],
+        cachedRead: async () => "",
+      },
+    } as unknown as App;
+    const index = new BodyTokenIndex(app, words);
+    expect(
+      index.restore(
+        [
+          {
+            path: "deleted.md",
+            mtime: 1,
+            size: 10,
+            tokens: [["deleted", 1]],
+          },
+        ],
+        40,
+      ),
+    ).toBe(true);
+
+    expect(await index.syncAll(40)).toBe(true);
+    expect(index.snapshot()).toEqual([]);
   });
 
   it("updates corpus frequency exactly after one note changes", async () => {

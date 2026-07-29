@@ -171,8 +171,8 @@ export class BodyTokenIndex {
     if (this.built) this.recompute(topN);
   }
 
-  async syncAll(topN: number, chunkSize = 32): Promise<void> {
-    await this.build(topN, false, chunkSize);
+  async syncAll(topN: number, chunkSize = 32): Promise<boolean> {
+    return this.build(topN, false, chunkSize);
   }
 
   async rebuildAll(topN: number): Promise<void> {
@@ -183,12 +183,13 @@ export class BodyTokenIndex {
     topN: number,
     force: boolean,
     chunkSize: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     for (;;) {
       const startedAt = this.generation;
       const files = this.app.vault.getMarkdownFiles();
       const nextCounts = new Map<string, Map<string, number>>();
       const nextStamps = new Map<string, FileStamp>();
+      let changed = force;
 
       for (let i = 0; i < files.length; i += chunkSize) {
         await Promise.all(
@@ -210,7 +211,9 @@ export class BodyTokenIndex {
               const body = await this.app.vault.cachedRead(file);
               nextCounts.set(file.path, this.analyzer.tokenize(body));
               nextStamps.set(file.path, stamp);
+              changed = true;
             } catch (error) {
+              if (cached) changed = true;
               console.error(
                 `Suggested Notes: failed to read "${file.path}" during body-token rebuild, skipping it`,
                 error,
@@ -221,10 +224,11 @@ export class BodyTokenIndex {
         await yieldToEventLoop();
       }
       if (startedAt !== this.generation) continue;
+      if (nextCounts.size !== this.counts.size) changed = true;
       this.counts = nextCounts;
       this.stamps = nextStamps;
       this.recompute(topN);
-      return;
+      return changed;
     }
   }
 

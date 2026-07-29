@@ -431,13 +431,25 @@ export default class RelatedNotesPlugin extends Plugin {
       // file stamps and analyzing only changed/new notes in the background.
       void this.refresh();
 
-      await titles.syncAll();
+      const titlesChanged = await titles.syncAll();
       if (this.unloaded) return;
+      let bodiesChanged = false;
       if (this.settings.bodyTokenEnabled) {
-        await body.syncAll(this.settings.bodyTokenTopN);
+        bodiesChanged = await body.syncAll(this.settings.bodyTokenTopN);
       }
       if (this.unloaded) return;
-      await this.persistMorphologyCache();
+      // A valid restored cache whose paths and file stamps still match is
+      // already the snapshot we would write. Avoid rewriting the vault-sized
+      // file on every plugin startup; missing/migrated caches and real sync
+      // changes still take the normal queued write path.
+      if (
+        titlesChanged ||
+        bodiesChanged ||
+        !this.loadedMorphologyCache
+      ) {
+        this.markMorphologyCacheDirty();
+      }
+      await this.flushMorphologyCache();
       void this.refresh();
     } catch (error) {
       console.error("Suggested Notes: morphology initialization failed", error);

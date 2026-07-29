@@ -50,15 +50,17 @@ export class TitleTokenIndex {
 
   // Reuses restored entries and analyzes only new/renamed titles. Deleted
   // paths disappear when the complete current map is swapped in.
-  async syncAll(chunkSize = 32): Promise<void> {
+  async syncAll(chunkSize = 32): Promise<boolean> {
     for (;;) {
       const startedAt = this.generation;
       const paths = [...this.store.all()].map((snapshot) => snapshot.path);
       const nextTokens = new Map<string, Set<string>>();
+      let changed = paths.length !== this.tokens.size;
 
       for (let i = 0; i < paths.length; i += chunkSize) {
         for (const path of paths.slice(i, i + chunkSize)) {
           const cached = this.tokens.get(path);
+          if (!cached) changed = true;
           nextTokens.set(
             path,
             cached
@@ -70,7 +72,7 @@ export class TitleTokenIndex {
       }
       if (startedAt !== this.generation) continue;
       this.replaceTokens(nextTokens);
-      return;
+      return changed;
     }
   }
 

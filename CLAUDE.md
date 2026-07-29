@@ -27,6 +27,8 @@ The normative implementation design is `docs/architecture.md`.
 6. Share that analyzer pair between titles, bodies, and user exclusions.
 7. Synchronize title tokens in bounded chunks and refresh.
 8. Synchronize the body corpus only when `bodyTokenEnabled` is true.
+9. Persist after startup synchronization only when the restored cache changed
+   or no valid cache existed.
 
 Do not move morphology initialization ahead of metadata rendering.
 

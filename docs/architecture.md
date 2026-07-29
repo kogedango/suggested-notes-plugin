@@ -177,6 +177,8 @@ what bounds the cost:
 
 - a note edit only marks the cache dirty;
 - a periodic flush writes it when dirty, as does plugin unload;
+- startup synchronization skips the write when restored paths and body file
+  stamps are unchanged;
 - rebuilds and custom-vocabulary changes flush immediately, because those are
   the states a cold start would otherwise redo.
 
