@@ -1,4 +1,6 @@
 import type { TokenCounter } from "../analysis/types";
+import { yieldToEventLoop } from "../util/async";
+import { inverseDocumentFrequency } from "../util/idf";
 import { basename } from "../util/path";
 import type { SnapshotReader } from "./store";
 
@@ -182,8 +184,7 @@ export class TitleTokenIndex {
     const cached = this.idfCache.get(token);
     if (cached !== undefined) return cached;
     const n = this.df.get(token) ?? 0;
-    const value =
-      n > 0 && this.totalNotes > 0 ? Math.log(this.totalNotes / n) : 0;
+    const value = inverseDocumentFrequency(this.totalNotes, n);
     this.idfCache.set(token, value);
     return value;
   }
@@ -229,10 +230,6 @@ function addPath(
     }
     paths.add(path);
   }
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 const EMPTY: ReadonlySet<string> = new Set();

@@ -19,6 +19,7 @@ import {
   normalizeTagSet,
 } from "../util/normalize";
 import { basename } from "../util/path";
+import { inverseDocumentFrequency } from "../util/idf";
 import { IDFTables } from "./idf";
 import { outlinkCountPenalty } from "./penalties";
 
@@ -180,7 +181,7 @@ export class ScoringEngine {
         const df = this.contentDocumentFrequency(tok, useBody);
         contentIdf.set(
           tok,
-          df > 0 && total > 0 ? Math.log(total / df) : 0,
+          inverseDocumentFrequency(total, df),
         );
         if (
           total > 0 &&

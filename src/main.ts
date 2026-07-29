@@ -31,6 +31,7 @@ import { t } from "./i18n";
 import { ScoringEngine } from "./scoring";
 import { RelatedNotesSettingTab } from "./settings/tab";
 import { DEFAULT_SETTINGS, PluginSettings } from "./types";
+import { DebouncedAction } from "./util/debouncedAction";
 import { parseListInput } from "./util/list";
 import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
@@ -40,6 +41,7 @@ const EMPTY_TOKENS: Set<string> = new Set();
 // last few minutes of tokenization costs one background resync, so edits just
 // mark it dirty and this interval — not the edit — decides when to write.
 const MORPHOLOGY_FLUSH_INTERVAL_MS = 180_000;
+const SETTINGS_SAVE_DEBOUNCE_MS = 750;
 const RESTORED_CACHE_ANALYZER: TokenCounter = {
   tokenize: () => new Map(),
 };
@@ -73,6 +75,10 @@ export default class RelatedNotesPlugin extends Plugin {
   private unloaded = false;
   private scheduleRefresh!: Debouncer<[], void>;
   private scheduleVocabularyRebuild!: Debouncer<[], void>;
+  private settingsSave = new DebouncedAction(
+    SETTINGS_SAVE_DEBOUNCE_MS,
+    () => this.saveSettingsInBackground(),
+  );
   private bodyRebuildPromise: Promise<void> | null = null;
   private bodyRebuildPending = false;
   private bodyRebuildNotify = false;
@@ -216,6 +222,7 @@ export default class RelatedNotesPlugin extends Plugin {
     // Drop any pending trailing debounces so they can't fire after unload.
     this.scheduleRefresh.cancel();
     this.scheduleVocabularyRebuild.cancel();
+    this.settingsSave.flush();
     // Obsidian does not await `onunload`, so this last write may not finish.
     // The periodic flush — not this one — is what actually bounds how much
     // tokenization a hard quit can cost.
@@ -307,7 +314,14 @@ export default class RelatedNotesPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
+    this.settingsSave.cancel();
     await this.queueSettingsSave();
+  }
+
+  // Text controls emit once per keystroke. Coalesce their small data.json
+  // writes while keeping saveSettings() immediate for toggles and commands.
+  scheduleSettingsSave(): void {
+    this.settingsSave.schedule();
   }
 
   // Settings text fields call this per keystroke; route through the debounced
@@ -606,6 +620,12 @@ export default class RelatedNotesPlugin extends Plugin {
     const queued = this.dataSaveQueue.catch(() => undefined).then(save);
     this.dataSaveQueue = queued;
     return queued;
+  }
+
+  private saveSettingsInBackground(): void {
+    void this.queueSettingsSave().catch((error) => {
+      console.error("Suggested Notes: failed to persist settings", error);
+    });
   }
 
   private flushMorphologyCache(force = false): Promise<void> {

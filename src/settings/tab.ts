@@ -16,13 +16,17 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       await this.plugin.saveSettings();
       this.plugin.invalidateAll();
     };
+    const scheduleSave = () => {
+      this.plugin.scheduleSettingsSave();
+      this.plugin.invalidateAll();
+    };
 
     new Setting(containerEl).setName(t("settingMaxResults")).addText((c) =>
-      c.setValue(String(this.plugin.settings.maxResults)).onChange(async (v) => {
+      c.setValue(String(this.plugin.settings.maxResults)).onChange((v) => {
         const n = parseInt(v, 10);
         if (!isNaN(n) && n > 0) {
           this.plugin.settings.maxResults = n;
-          await save();
+          scheduleSave();
         }
       }),
     );
@@ -45,11 +49,11 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         | "contentWeight",
     ) => {
       new Setting(containerEl).setName(name).addText((c) =>
-        c.setValue(String(this.plugin.settings[key])).onChange(async (v) => {
+        c.setValue(String(this.plugin.settings[key])).onChange((v) => {
           const n = parseFloat(v);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings[key] = n;
-            await save();
+            scheduleSave();
           }
         }),
       );
@@ -84,12 +88,12 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       .addTextArea((c) =>
         c
           .setValue(this.plugin.settings.customVocabulary.join("\n"))
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.customVocabulary = parseListInput(
               value,
               false,
             );
-            await this.plugin.saveSettings();
+            this.plugin.scheduleSettingsSave();
             this.plugin.scheduleVocabularyApply();
           }),
       );
@@ -104,7 +108,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
             const n = parseInt(v, 10);
             if (!isNaN(n) && n > 0) {
               this.plugin.settings.bodyTokenTopN = n;
-              await this.plugin.saveSettings();
+              this.plugin.scheduleSettingsSave();
               if (this.plugin.settings.bodyTokenEnabled) {
                 await this.plugin.rerankBodyIndex();
               }
@@ -185,9 +189,9 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         .addTextArea((c) =>
           c
             .setValue(this.plugin.settings[key].join("\n"))
-            .onChange(async (v) => {
+            .onChange((v) => {
               this.plugin.settings[key] = parseListInput(v, splitCommas);
-              await save();
+              scheduleSave();
             }),
         );
     };

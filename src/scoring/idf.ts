@@ -1,5 +1,6 @@
 import type { InvertedIndex } from "../cache/inverted";
 import type { SnapshotReader } from "../cache/store";
+import { inverseDocumentFrequency } from "../util/idf";
 
 export class IDFTables {
   private dirty = true;
@@ -29,7 +30,7 @@ export class IDFTables {
     const cached = this.tagIDF.get(tag);
     if (cached !== undefined) return cached;
     const n = this.inverted.notesWithTagCount(tag);
-    const idf = n > 0 ? Math.log(this.totalNotes / n) : 0;
+    const idf = inverseDocumentFrequency(this.totalNotes, n);
     this.tagIDF.set(tag, idf);
     return idf;
   }
@@ -39,7 +40,7 @@ export class IDFTables {
     const cached = this.linkIDF.get(target);
     if (cached !== undefined) return cached;
     const n = this.inverted.notesLinkingToCount(target);
-    const idf = n > 0 ? Math.log(this.totalNotes / n) : 0;
+    const idf = inverseDocumentFrequency(this.totalNotes, n);
     this.linkIDF.set(target, idf);
     return idf;
   }

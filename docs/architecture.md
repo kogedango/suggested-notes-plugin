@@ -170,7 +170,9 @@ notes are synchronized in the background.
 It is stored in `morphology-cache.json` inside the plugin folder, not in
 `data.json`. `saveData` rewrites its entire payload, so a cache kept there made
 every settings change write a vault-sized file. `data.json` now holds the
-settings alone and its size no longer follows the Vault's.
+settings alone and its size no longer follows the Vault's. Text and numeric
+controls also coalesce consecutive keystrokes into one delayed settings write;
+toggles and explicit actions still persist immediately.
 
 The cache file is written whole, so writing timing rather than write size is
 what bounds the cost:
@@ -328,7 +330,7 @@ improvement guaranteed by the code is removal of the decoded compressed
 `restore`. Once the live indexes exist they can produce the next snapshot
 themselves, so the field is released as soon as restoration finishes; keeping it
 would hold a second vault-sized representation for the session. The
-`currentMorphologyCache` fallback that read it required a matching vocabulary
+Any fallback that reused it for writing would require a matching vocabulary
 signature, which no longer holds once the live indexes have diverged, so
 releasing it changes no behaviour.
 

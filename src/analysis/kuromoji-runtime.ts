@@ -23,6 +23,7 @@ import {
   compactTrailingZeroUint32,
 } from "./dictionaryBuffers";
 import { KuromojiJapaneseAnalyzer } from "./japanese";
+import { yieldToEventLoop } from "../util/async";
 
 // Notices for the Kuromoji code and IPADIC data bundled through these imports
 // are emitted into main.js by esbuild's banner. See scripts/licenses.mjs.
@@ -132,8 +133,4 @@ function decompressUint32(compressed: Uint8Array): Uint32Array {
     );
   }
   return new Uint32Array(new Uint8Array(bytes).buffer);
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }

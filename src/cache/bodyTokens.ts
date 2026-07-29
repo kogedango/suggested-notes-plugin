@@ -1,5 +1,7 @@
 import { App, TFile } from "obsidian";
 import type { TokenCounter } from "../analysis/types";
+import { yieldToEventLoop } from "../util/async";
+import { inverseDocumentFrequency } from "../util/idf";
 import type { TitleTokenIndex } from "./titleTokens";
 
 export interface BodyTokenCacheEntry {
@@ -84,8 +86,7 @@ export class BodyTokenIndex {
     const cached = this.idfCache.get(token);
     if (cached !== undefined) return cached;
     const n = this.df.get(token) ?? 0;
-    const value =
-      n > 0 && this.totalNotes > 0 ? Math.log(this.totalNotes / n) : 0;
+    const value = inverseDocumentFrequency(this.totalNotes, n);
     this.idfCache.set(token, value);
     return value;
   }
@@ -417,7 +418,9 @@ export function rankSalient(
     ranked.push({
       token,
       df: documentFrequency,
-      score: Math.log(1 + tf) * Math.log(totalNotes / documentFrequency),
+      score:
+        Math.log(1 + tf) *
+        inverseDocumentFrequency(totalNotes, documentFrequency),
     });
   }
   ranked.sort((a, b) => b.score - a.score);
@@ -469,10 +472,6 @@ function removePathFromTokenIndex(
   const paths = index.get(token);
   paths?.delete(path);
   if (paths?.size === 0) index.delete(token);
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 const EMPTY: ReadonlySet<string> = new Set();
