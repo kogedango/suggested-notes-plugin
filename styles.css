@@ -150,109 +150,14 @@
   color: var(--text-success, var(--interactive-accent));
 }
 
-.suggested-notes-copy-feedback {
-  position: absolute;
-  z-index: 2;
-  inset-inline-end: var(--size-4-2);
-  top: 50%;
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-1);
-  padding: 3px var(--size-4-2);
-  color: var(--text-on-accent);
-  background-color: var(--interactive-accent);
-  border-radius: 999px;
-  box-shadow: var(--shadow-s);
-  font-size: var(--font-ui-smaller);
-  font-weight: var(--font-semibold);
-  line-height: 1.4;
-  white-space: nowrap;
-  pointer-events: none;
-  transform-origin: right center;
-  animation: suggested-notes-copy-feedback 1.4s ease-out forwards;
-}
-
-.suggested-notes-copy-feedback-icon,
-.suggested-notes-copy-feedback-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.suggested-notes-self.is-copy-confirmed {
-  animation: suggested-notes-copy-row 1.4s ease-out;
-}
-
-@keyframes suggested-notes-copy-feedback {
-  0% {
-    opacity: 0;
-    transform: translateY(-50%) scale(0.82);
-  }
-
-  12%,
-  76% {
-    opacity: 1;
-    transform: translateY(-50%) scale(1);
-  }
-
-  100% {
-    opacity: 0;
-    transform: translateY(-50%) scale(0.96);
-  }
-}
-
-@keyframes suggested-notes-copy-row {
-  0%,
-  100% {
-    background-color: transparent;
-    box-shadow: inset 0 0 0 0 transparent;
-  }
-
-  15% {
-    background-color: var(
-      --background-modifier-active-hover,
-      var(--background-modifier-hover)
-    );
-    background-color: color-mix(
-      in srgb,
-      var(--interactive-accent) 24%,
-      transparent
-    );
-    box-shadow: inset 3px 0 0 0 var(--interactive-accent);
-  }
-}
-
-/* Mobile long-press copy: held past the threshold, the row lights up to say
-   the copy is armed. The finger is still on the row at that moment, so this
-   has to read from under the thumb; the notice only lands on release. */
+/* Match Obsidian's navigation-item hover treatment while a mobile long press
+   is armed. Completion is reported once through the standard Notice UI. */
 .suggested-notes-self.is-copy-armed {
-  /* Themes put --background-modifier-active-hover around 12% grey, which is
-     too faint to notice on a phone with a thumb over the row, so tint with the
-     accent. The plain value is the fallback where color-mix is unavailable. */
-  background-color: var(--background-modifier-active-hover, var(--background-modifier-hover));
-  background-color: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
-  box-shadow: inset 3px 0 0 0 var(--interactive-accent);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .suggested-notes-copy-feedback {
-    opacity: 1;
-    transform: translateY(-50%);
-    animation: none;
-  }
-
-  .suggested-notes-self.is-copy-confirmed {
-    background-color: var(
-      --background-modifier-active-hover,
-      var(--background-modifier-hover)
-    );
-    background-color: color-mix(
-      in srgb,
-      var(--interactive-accent) 24%,
-      transparent
-    );
-    box-shadow: inset 3px 0 0 0 var(--interactive-accent);
-    animation: none;
-  }
+  background-color: var(
+    --nav-item-background-hover,
+    var(--background-modifier-hover)
+  );
+  border-radius: var(--radius-s);
 }
 
 .suggested-notes-tags-section {

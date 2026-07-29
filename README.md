@@ -13,7 +13,7 @@ Related notes are picked by a weighted score over shared tags, links, backlinks,
 - **Bilingual morphology** — Kuromoji/IPADIC and wink-nlp extract content words and normalize inflections in mixed Japanese/English text ([details](#japanese-and-english-morphology))
 - **Content-aware by default** — title words and salient body words form one deduplicated content signal. Disable body matching to avoid a vault-wide body index
 - **Offline, no AI** — no embeddings, no external APIs
-- **No full-vault scan per query** — inverted indexes narrow candidates before scoring. Mobile is [being verified for the v0.6.4 prerelease](docs/mobile-testing.md)
+- **No full-vault scan per query** — inverted indexes narrow candidates before scoring. Mobile is [being verified for the v0.6.5 prerelease](docs/mobile-testing.md)
 - **Never writes plugin state to your notes** — notes change only when you explicitly add a suggested tag
 - **UI in Japanese and English** — follows Obsidian's language setting
 

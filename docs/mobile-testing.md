@@ -1,6 +1,6 @@
-# Mobile testing for v0.6.4
+# Mobile testing for v0.6.5
 
-Status: **basic use through v0.6.1 verified on an iPhone 13; v0.6.4 long-press
+Status: **basic use through v0.6.1 verified on an iPhone 13; v0.6.5 long-press
 copy, startup cache, and full resource checks pending**.
 
 `manifest.json` declares `isDesktopOnly: false`, and the implementation avoids
@@ -9,7 +9,7 @@ support in user-facing documentation.
 
 ## Build under test
 
-- Version: `0.6.4`
+- Version: `0.6.5`
 - Distribution: GitHub prerelease installed through BRAT
 - Bundle: approximately 27.5 MB, primarily the embedded IPADIC dictionary
 - Network access at runtime: none
@@ -20,7 +20,7 @@ Record the tested commit and exact bundle size for each test round.
 
 | Platform | OS version | Device | Obsidian version | Vault size | Result |
 |---|---|---|---|---:|---|
-| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use through v0.6.1 passed; v0.6.4 pending |
+| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use through v0.6.1 passed; v0.6.5 pending |
 | Android | — | — | — | — | Pending |
 
 Only platforms required for the release need a passing result. Untested
@@ -31,7 +31,7 @@ platforms must remain explicitly labeled as unverified.
 1. Back up the Vault or use a representative test Vault.
 2. Install and enable BRAT from Community plugins.
 3. Add `kogedango/suggested-notes-plugin` as a beta plugin.
-4. Select the `0.6.4` prerelease and enable Suggested Notes.
+4. Select the `0.6.5` prerelease and enable Suggested Notes.
 5. Fully quit and restart Obsidian before cold-start measurements.
 
 ## Required checks
@@ -62,8 +62,8 @@ platforms must remain explicitly labeled as unverified.
 - Unlinked title mentions work without counting existing links.
 - A row tap opens the note, a score tap toggles its details, and a row long
   press copies the link without also opening the note.
-- Releasing an armed long press flashes the row and shows the check-marked
-  copied label clearly without shifting the list.
+- While armed, a long press uses the theme's standard navigation-item
+  highlight. Releasing it reports completion once through an Obsidian notice.
 - The long-pressed link pastes correctly into a note. WebKit refuses clipboard
   writes without user activation, so a silent no-op here means the write is
   running outside the touch handler.
