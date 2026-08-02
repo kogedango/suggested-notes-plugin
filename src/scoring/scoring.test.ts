@@ -378,6 +378,60 @@ describe("ScoringEngine.score", () => {
     );
     expect(results).toEqual([]);
   });
+
+  it("limits candidates to the active note's root folder when enabled", () => {
+    const e = engine([
+      snap("Projects/Alpha/active.md", {
+        tags: ["x"],
+        folder: "Projects/Alpha",
+      }),
+      snap("Projects/Beta/match.md", {
+        tags: ["x"],
+        folder: "Projects/Beta",
+      }),
+      snap("Archive/match.md", { tags: ["x"], folder: "Archive" }),
+      snap("filler.md"),
+    ]);
+    const { results } = e.score(
+      "Projects/Alpha/active.md",
+      settings({ sameRootFolderOnly: true }),
+      NO_TOKENS,
+    );
+    expect(results.map((result) => result.path)).toEqual([
+      "Projects/Beta/match.md",
+    ]);
+  });
+
+  it("keeps cross-root candidates when the setting is off by default", () => {
+    const e = engine([
+      snap("Projects/active.md", { tags: ["x"], folder: "Projects" }),
+      snap("Archive/match.md", { tags: ["x"], folder: "Archive" }),
+      snap("filler.md"),
+    ]);
+    const { results } = e.score(
+      "Projects/active.md",
+      settings(),
+      NO_TOKENS,
+    );
+    expect(results.map((result) => result.path)).toEqual([
+      "Archive/match.md",
+    ]);
+  });
+
+  it("groups vault-root notes together when root-folder limiting is enabled", () => {
+    const e = engine([
+      snap("active.md", { tags: ["x"] }),
+      snap("match.md", { tags: ["x"] }),
+      snap("Projects/match.md", { tags: ["x"], folder: "Projects" }),
+      snap("filler.md"),
+    ]);
+    const { results } = e.score(
+      "active.md",
+      settings({ sameRootFolderOnly: true }),
+      NO_TOKENS,
+    );
+    expect(results.map((result) => result.path)).toEqual(["match.md"]);
+  });
 });
 
 describe("ScoringEngine.score — content tokens", () => {

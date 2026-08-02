@@ -13,6 +13,10 @@ const en = {
 
   // Settings tab — Max results
   settingMaxResults: "Max results",
+  settingSameRootFolderOnly: "Limit to the same root folder",
+  descSameRootFolderOnly:
+    "Only show notes under the same top-level folder as the active note. " +
+    "Notes stored directly in the vault root are grouped together.",
 
   // Settings tab — Weights
   settingWeightsHeading: "Weights",
@@ -135,6 +139,10 @@ const ja: Partial<Record<keyof typeof en, string>> = {
   commandRebuildIndex: "本文トークンインデックスを再構築",
 
   settingMaxResults: "最大表示件数",
+  settingSameRootFolderOnly: "同じルートフォルダのみに限定",
+  descSameRootFolderOnly:
+    "アクティブノートと同じ最上位フォルダ以下のノートだけを表示します。" +
+    "Vault直下のノート同士は同じグループとして扱います。",
 
   settingWeightsHeading: "重み",
   settingWeightsDesc:

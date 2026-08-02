@@ -1,5 +1,8 @@
 export interface PluginSettings {
   maxResults: number;
+  // Restrict candidates to the active note's first path segment. Notes at
+  // the vault root form their own group.
+  sameRootFolderOnly: boolean;
 
   outlinkWeight: number;
   tagWeight: number;
@@ -37,6 +40,7 @@ export interface PluginSettings {
 
 export const DEFAULT_SETTINGS: PluginSettings = {
   maxResults: 20,
+  sameRootFolderOnly: false,
 
   outlinkWeight: 8,
   tagWeight: 5,

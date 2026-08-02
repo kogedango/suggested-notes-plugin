@@ -20,6 +20,12 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       this.plugin.scheduleSettingsSave();
       this.plugin.invalidateAll();
     };
+    // Obsidian owns the heading markup so it stays consistent with core
+    // settings and with whatever a theme does to them. Building an <h3> and a
+    // description paragraph by hand pins both to this plugin instead.
+    const heading = (name: string, desc: string) => {
+      new Setting(containerEl).setName(name).setDesc(desc).setHeading();
+    };
 
     new Setting(containerEl).setName(t("settingMaxResults")).addText((c) =>
       c.setValue(String(this.plugin.settings.maxResults)).onChange((v) => {
@@ -31,11 +37,19 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
       }),
     );
 
-    containerEl.createEl("h3", { text: t("settingWeightsHeading") });
-    containerEl.createEl("p", {
-      text: t("settingWeightsDesc"),
-      cls: "setting-item-description",
-    });
+    new Setting(containerEl)
+      .setName(t("settingSameRootFolderOnly"))
+      .setDesc(t("descSameRootFolderOnly"))
+      .addToggle((c) =>
+        c
+          .setValue(this.plugin.settings.sameRootFolderOnly)
+          .onChange(async (v) => {
+            this.plugin.settings.sameRootFolderOnly = v;
+            await save();
+          }),
+      );
+
+    heading(t("settingWeightsHeading"), t("settingWeightsDesc"));
 
     const weightSetting = (
       name: string,
@@ -66,11 +80,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
     weightSetting(t("weightFolder"), "folderWeight");
     weightSetting(t("weightContent"), "contentWeight");
 
-    containerEl.createEl("h3", { text: t("settingBodyTokenHeading") });
-    containerEl.createEl("p", {
-      text: t("settingBodyTokenDesc"),
-      cls: "setting-item-description",
-    });
+    heading(t("settingBodyTokenHeading"), t("settingBodyTokenDesc"));
 
     new Setting(containerEl)
       .setName(t("settingBodyTokenEnable"))
@@ -134,11 +144,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         }),
       );
 
-    containerEl.createEl("h3", { text: t("settingDisplayHeading") });
-    containerEl.createEl("p", {
-      text: t("descDisplayScores"),
-      cls: "setting-item-description",
-    });
+    heading(t("settingDisplayHeading"), t("descDisplayScores"));
 
     new Setting(containerEl).setName(t("settingShowScores")).addToggle((c) =>
       c.setValue(this.plugin.settings.showScores).onChange(async (v) => {
@@ -165,11 +171,7 @@ export class RelatedNotesSettingTab extends PluginSettingTab {
         }),
     );
 
-    containerEl.createEl("h3", { text: t("settingExclusionsHeading") });
-    containerEl.createEl("p", {
-      text: t("descExclusions"),
-      cls: "setting-item-description",
-    });
+    heading(t("settingExclusionsHeading"), t("descExclusions"));
 
     // splitCommas only where a comma can never be part of a valid entry —
     // folder paths and note basenames may legally contain commas.

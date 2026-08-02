@@ -2,7 +2,6 @@ import {
   ItemView,
   Notice,
   Platform,
-  TFile,
   WorkspaceLeaf,
   setIcon,
 } from "obsidian";
@@ -528,10 +527,8 @@ export class RelatedNotesView extends ItemView {
   }
 
   private openNote(path: string, newPane: boolean): void {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (file instanceof TFile) {
-      this.app.workspace.getLeaf(newPane).openFile(file);
-    }
+    const file = this.app.vault.getFileByPath(path);
+    if (file) this.app.workspace.getLeaf(newPane).openFile(file);
   }
 }
 

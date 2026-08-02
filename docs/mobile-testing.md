@@ -1,7 +1,7 @@
-# Mobile testing for v0.6.5
+# Mobile testing for v0.6.6
 
-Status: **basic use through v0.6.1 verified on an iPhone 13; v0.6.5 long-press
-copy, startup cache, and full resource checks pending**.
+Status: **basic use through v0.6.1 verified on an iPhone 13; v0.6.6 same-root
+scoping, long-press copy, startup cache, and full resource checks pending**.
 
 `manifest.json` declares `isDesktopOnly: false`, and the implementation avoids
 desktop-only APIs. This document is the release gate for claiming mobile
@@ -9,9 +9,10 @@ support in user-facing documentation.
 
 ## Build under test
 
-- Version: `0.6.5`
+- Version: `0.6.6`
+- Minimum Obsidian version: `1.12.7`
 - Distribution: GitHub prerelease installed through BRAT
-- Bundle: approximately 27.5 MB, primarily the embedded IPADIC dictionary
+- Bundle: `main.js` is 26.25 MB, primarily the embedded IPADIC dictionary
 - Network access at runtime: none
 
 Record the tested commit and exact bundle size for each test round.
@@ -20,7 +21,7 @@ Record the tested commit and exact bundle size for each test round.
 
 | Platform | OS version | Device | Obsidian version | Vault size | Result |
 |---|---|---|---|---:|---|
-| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use through v0.6.1 passed; v0.6.5 pending |
+| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use through v0.6.1 passed; v0.6.6 pending |
 | Android | — | — | — | — | Pending |
 
 Only platforms required for the release need a passing result. Untested
@@ -31,7 +32,8 @@ platforms must remain explicitly labeled as unverified.
 1. Back up the Vault or use a representative test Vault.
 2. Install and enable BRAT from Community plugins.
 3. Add `kogedango/suggested-notes-plugin` as a beta plugin.
-4. Select the `0.6.5` prerelease and enable Suggested Notes.
+4. Select the `0.6.6` prerelease and enable Suggested Notes, confirming its
+   manifest reports `0.6.6`.
 5. Fully quit and restart Obsidian before cold-start measurements.
 
 ## Required checks
@@ -60,6 +62,11 @@ platforms must remain explicitly labeled as unverified.
 - Mixed terms such as `API設計` remain usable.
 - Vault-specific vocabulary and aliases work.
 - Unlinked title mentions work without counting existing links.
+- The same-root-folder setting defaults to off. When enabled, nested notes
+  under the active note's top-level folder remain visible, notes under another
+  top-level folder disappear, and Vault-root notes match only Vault-root notes.
+- Switching the same-root-folder setting on and off refreshes related notes and
+  suggested tags immediately and remains in effect after restarting Obsidian.
 - A row tap opens the note, a score tap toggles its details, and a row long
   press copies the link without also opening the note.
 - While armed, a long press uses the theme's standard navigation-item

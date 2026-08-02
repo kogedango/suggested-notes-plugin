@@ -4,6 +4,11 @@ export function basename(path: string): string {
   return base.endsWith(".md") ? base.slice(0, -3) : base;
 }
 
+export function rootFolder(path: string): string {
+  const slash = path.indexOf("/");
+  return slash >= 0 ? path.slice(0, slash) : "";
+}
+
 export function displayName(path: string): string {
   return basename(path);
 }

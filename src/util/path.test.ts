@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { basename, displayName } from "./path";
+import { basename, displayName, rootFolder } from "./path";
 
 describe("basename", () => {
   it("returns the file name without .md", () => {
@@ -20,5 +20,15 @@ describe("basename", () => {
 describe("displayName", () => {
   it("delegates to basename", () => {
     expect(displayName("a/b/c.md")).toBe("c");
+  });
+});
+
+describe("rootFolder", () => {
+  it("returns the first folder in a nested path", () => {
+    expect(rootFolder("Projects/Alpha/Note.md")).toBe("Projects");
+  });
+
+  it("treats vault-root notes as their own group", () => {
+    expect(rootFolder("Note.md")).toBe("");
   });
 });

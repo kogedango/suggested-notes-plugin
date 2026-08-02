@@ -8,9 +8,11 @@ export const MORPHOLOGY_CACHE_FILENAME = "morphology-cache.json";
 
 // The slice of Obsidian's DataAdapter this module needs. Obsidian's own
 // adapter satisfies it structurally; tests supply an in-memory double.
-// `remove` is deliberately absent: it only exists from app 1.7.2 and this
-// plugin supports 1.4.0, and an obsolete cache is overwritten rather than
-// deleted.
+// `remove` and `rename` are absent only because nothing here needs them yet:
+// an obsolete cache is overwritten rather than deleted. Both are available at
+// the declared minAppVersion, so widening this interface is a free change —
+// writing to a temporary path and renaming it into place would make a write
+// interrupted by a quit leave the previous cache intact.
 export interface CacheFileAdapter {
   read(path: string): Promise<string>;
   write(path: string, data: string): Promise<void>;
@@ -24,6 +26,9 @@ export function morphologyCachePath(
   pluginId: string,
 ): string {
   const dir = manifestDir ?? `${configDir}/plugins/${pluginId}`;
+  // Joined, not normalized: `obsidian` ships no runtime entry point, so a value
+  // import here would break this module's unit tests. The caller passes the
+  // result through `normalizePath` before it reaches DataAdapter.
   return `${dir}/${MORPHOLOGY_CACHE_FILENAME}`;
 }
 

@@ -4,8 +4,10 @@ import {
   Plugin,
   TAbstractFile,
   TFile,
+  WorkspaceItem,
   WorkspaceLeaf,
   debounce,
+  normalizePath,
 } from "obsidian";
 import { BodyTokenIndex } from "./cache/bodyTokens";
 import { InvertedIndex } from "./cache/inverted";
@@ -31,7 +33,6 @@ import { t } from "./i18n";
 import { ScoringEngine } from "./scoring";
 import { RelatedNotesSettingTab } from "./settings/tab";
 import { DEFAULT_SETTINGS, PluginSettings } from "./types";
-import { DebouncedAction } from "./util/debouncedAction";
 import { parseListInput } from "./util/list";
 import { RelatedNotesView, VIEW_TYPE_RELATED_NOTES } from "./view/sidebar";
 
@@ -41,6 +42,11 @@ const EMPTY_TOKENS: Set<string> = new Set();
 // last few minutes of tokenization costs one background resync, so edits just
 // mark it dirty and this interval — not the edit — decides when to write.
 const MORPHOLOGY_FLUSH_INTERVAL_MS = 180_000;
+// Must stay below the vocabulary-rebuild debounce in onload (800 ms). The
+// custom-vocabulary field schedules both, and the cache signature written by
+// the rebuild has to describe vocabulary that is already on disk. Raising this
+// past that value costs one discarded cache and one rebuild, not correctness,
+// but neither call site shows the dependency.
 const SETTINGS_SAVE_DEBOUNCE_MS = 750;
 const RESTORED_CACHE_ANALYZER: TokenCounter = {
   tokenize: () => new Map(),
@@ -75,9 +81,12 @@ export default class RelatedNotesPlugin extends Plugin {
   private unloaded = false;
   private scheduleRefresh!: Debouncer<[], void>;
   private scheduleVocabularyRebuild!: Debouncer<[], void>;
-  private settingsSave = new DebouncedAction(
-    SETTINGS_SAVE_DEBOUNCE_MS,
+  // resetTimer: true — every keystroke restarts the window, so a burst of
+  // typing produces one write instead of one per pause boundary.
+  private settingsSave: Debouncer<[], void> = debounce(
     () => this.saveSettingsInBackground(),
+    SETTINGS_SAVE_DEBOUNCE_MS,
+    true,
   );
   private bodyRebuildPromise: Promise<void> | null = null;
   private bodyRebuildPending = false;
@@ -91,6 +100,7 @@ export default class RelatedNotesPlugin extends Plugin {
   private legacyCacheInDataJson = false;
   private lastRefreshedPath: string | null = null;
   private refreshVersion = 0;
+  private activateViewPromise: Promise<void> | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -222,7 +232,7 @@ export default class RelatedNotesPlugin extends Plugin {
     // Drop any pending trailing debounces so they can't fire after unload.
     this.scheduleRefresh.cancel();
     this.scheduleVocabularyRebuild.cancel();
-    this.settingsSave.flush();
+    this.settingsSave.run();
     // Obsidian does not await `onunload`, so this last write may not finish.
     // The periodic flush — not this one — is what actually bounds how much
     // tokenization a hard quit can cost.
@@ -270,10 +280,12 @@ export default class RelatedNotesPlugin extends Plugin {
       this.settings.customVocabulary.join("\n"),
       false,
     );
-    this.morphologyCachePath = morphologyCachePath(
-      this.manifest.dir,
-      this.app.vault.configDir,
-      this.manifest.id,
+    this.morphologyCachePath = normalizePath(
+      morphologyCachePath(
+        this.manifest.dir,
+        this.app.vault.configDir,
+        this.manifest.id,
+      ),
     );
     // An earlier data.json may still hold a usable cache. Reuse it so upgrading
     // doesn't cost a full rebuild, and mark it dirty so the first flush moves
@@ -321,7 +333,7 @@ export default class RelatedNotesPlugin extends Plugin {
   // Text controls emit once per keystroke. Coalesce their small data.json
   // writes while keeping saveSettings() immediate for toggles and commands.
   scheduleSettingsSave(): void {
-    this.settingsSave.schedule();
+    this.settingsSave();
   }
 
   // Settings text fields call this per keystroke; route through the debounced
@@ -491,6 +503,8 @@ export default class RelatedNotesPlugin extends Plugin {
       this.store,
       RESTORED_CACHE_ANALYZER,
     );
+    // restore() validates every entry before it consumes anything, so failing
+    // here leaves `cached` untouched and initializeMorphology can still use it.
     if (!titles.restore(cached.titles, { consume: true })) return;
     const body = new BodyTokenIndex(
       this.app,
@@ -503,6 +517,11 @@ export default class RelatedNotesPlugin extends Plugin {
         consume: true,
       })
     ) {
+      // Past the title restore, `cached` is half-consumed: reusing it later
+      // would silently restore an empty title index. Drop it and let
+      // initializeMorphology rebuild from the vault instead. Unreachable while
+      // isUsableMorphologyCache validates every body entry at load time.
+      this.loadedMorphologyCache = undefined;
       return;
     }
     if (!this.settings.bodyTokenEnabled) cached.bodies.length = 0;
@@ -644,7 +663,15 @@ export default class RelatedNotesPlugin extends Plugin {
       const loadedCache = liveIndexes
         ? undefined
         : this.loadedMorphologyCacheForWrite();
-      if (!liveIndexes && !loadedCache) return;
+      // Nothing writable yet — the analyzer is still initializing and the
+      // restored arrays have already been consumed. The flag was cleared when
+      // this write was queued, so put it back: otherwise a periodic flush
+      // landing in that window silently drops the pending state, and a
+      // data.json migration with no other change would wait for a restart.
+      if (!liveIndexes && !loadedCache) {
+        this.morphologyCacheDirty = true;
+        return;
+      }
       try {
         if (liveIndexes) {
           await writeMorphologyCacheFileStreaming(
@@ -816,18 +843,39 @@ export default class RelatedNotesPlugin extends Plugin {
     void this.refresh();
   }
 
-  async activateView(): Promise<void> {
-    const { workspace } = this.app;
-    const [existing, ...duplicates] = workspace.getLeavesOfType(
-      VIEW_TYPE_RELATED_NOTES,
-    );
-    // A restored mobile layout can contain more than one leaf for the same
-    // custom view. Obsidian then lists the identical view twice in the sidebar
-    // picker. This view is intentionally a singleton, so retain the first
-    // restored leaf and remove only duplicate instances of our own view.
-    for (const duplicate of duplicates) duplicate.detach();
+  // onLayoutReady and the command both call this, and neither awaits it. The
+  // leaf lookup below is synchronous but `setViewState` is not, so two calls
+  // that overlap would both see no leaf and both create one — and
+  // `getRightLeaf(false)` hands out a fresh leaf per call, so that produces two
+  // instances of this view in the same sidebar. Sharing the in-flight promise
+  // makes the lookup-and-create pair effectively atomic.
+  activateView(): Promise<void> {
+    this.activateViewPromise ??= this.openOrRevealView().finally(() => {
+      this.activateViewPromise = null;
+    });
+    return this.activateViewPromise;
+  }
 
-    let leaf: WorkspaceLeaf | null = existing ?? null;
+  private async openOrRevealView(): Promise<void> {
+    const { workspace } = this.app;
+    // Duplicates left by an older build (see activateView) still need clearing,
+    // but only within one container. `getLeavesOfType` walks the main area
+    // first, then the left sidebar, then the right one, so detaching everything
+    // after index 0 would drop the sidebar copy and keep a main-area tab — the
+    // opposite of what this method is for. Two copies in *different* containers
+    // are a layout the user built, not damage to repair.
+    const roots = new Set<WorkspaceItem>();
+    const kept: WorkspaceLeaf[] = [];
+    for (const candidate of workspace.getLeavesOfType(VIEW_TYPE_RELATED_NOTES)) {
+      const root = candidate.getRoot();
+      if (roots.has(root)) candidate.detach();
+      else {
+        roots.add(root);
+        kept.push(candidate);
+      }
+    }
+
+    let leaf: WorkspaceLeaf | null = kept[0] ?? null;
     if (!leaf) {
       leaf = workspace.getRightLeaf(false);
       if (leaf)
@@ -843,8 +891,8 @@ export default class RelatedNotesPlugin extends Plugin {
     activePath: string,
     targetPath: string,
   ): Promise<boolean> {
-    const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
-    if (!(targetFile instanceof TFile)) return false;
+    const targetFile = this.app.vault.getFileByPath(targetPath);
+    if (!targetFile) return false;
     const link = this.app.fileManager.generateMarkdownLink(
       targetFile,
       activePath,

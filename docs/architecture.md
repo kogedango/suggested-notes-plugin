@@ -412,6 +412,20 @@ Candidate generation uses inverted indexes for:
 - shared title/body content;
 - same-folder candidates when folder weight is non-zero.
 
+`sameRootFolderOnly` is a query-time scope filter applied after candidate
+generation and before reasons and scores are computed. It is disabled by
+default, preserving whole-Vault discovery. When enabled, the active note and a
+candidate must have the same first path segment: for example,
+`Projects/Alpha.md` and `Projects/Archive/Beta.md` share the `Projects` root,
+while `Projects/Alpha.md` and `Areas/Beta.md` do not. Notes stored directly in
+the Vault root have an empty root segment and therefore match only other
+Vault-root notes.
+
+The filter applies before both result ranking and tag-pool construction, so a
+note outside the selected root cannot appear in the related-note list or
+contribute a suggested tag. It does not rebuild or partition indexes and does
+not change Vault-wide document-frequency statistics.
+
 Lexical candidate expansion is capped at 40% document frequency. Common content
 words may still explain an already-discovered candidate but do not broaden the
 candidate set.

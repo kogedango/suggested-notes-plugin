@@ -18,7 +18,7 @@ import {
   normalizeLinkSet,
   normalizeTagSet,
 } from "../util/normalize";
-import { basename } from "../util/path";
+import { basename, rootFolder } from "../util/path";
 import { inverseDocumentFrequency } from "../util/idf";
 import { IDFTables } from "./idf";
 import { outlinkCountPenalty } from "./penalties";
@@ -96,6 +96,7 @@ export class ScoringEngine {
     const active = this.store.get(activePath);
     if (!active) return { results: [], tagPool: [] };
 
+    const activeRootFolder = rootFolder(activePath);
     const excludedTags = normalizeTagSet(settings.excludedTags);
     const excludedLinks = normalizeLinkSet(settings.excludedLinks);
     // Exclusions require the analyzer for canonical matching.
@@ -207,6 +208,12 @@ export class ScoringEngine {
     for (const path of candidates) {
       const snap = this.store.get(path);
       if (!snap) continue;
+      if (
+        settings.sameRootFolderOnly &&
+        rootFolder(snap.path) !== activeRootFolder
+      ) {
+        continue;
+      }
       if (isExcludedByFolder(snap.folder, settings.excludedFolders)) continue;
 
       const reasons = this.computeReasons(
