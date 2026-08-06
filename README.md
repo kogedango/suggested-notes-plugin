@@ -53,6 +53,12 @@ Not in the community plugin store. Two options:
 
 BRAT auto-updates the plugin when a new version is released.
 
+Enabling the plugin adds its view to the right sidebar but does not open it.
+Open it from the sidebar tab, or run the command "Open related notes for the
+active note". The plugin never opens the view on startup, so the sidebar stays
+where you left it — which matters most on mobile, where the right sidebar
+covers the screen.
+
 ### Manual
 
 1. Download `main.js`, `manifest.json` (and `styles.css` if present) from the

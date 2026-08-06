@@ -1,7 +1,8 @@
-# Mobile testing for v0.6.6
+# Mobile testing for v0.6.7
 
-Status: **basic use through v0.6.1 verified on an iPhone 13; v0.6.6 same-root
-scoping, long-press copy, startup cache, and full resource checks pending**.
+Status: **basic use through v0.6.1 verified on an iPhone 13; v0.6.7 startup
+sidebar behavior, and the v0.6.6 same-root scoping, long-press copy, startup
+cache, and full resource checks, pending**.
 
 `manifest.json` declares `isDesktopOnly: false`, and the implementation avoids
 desktop-only APIs. This document is the release gate for claiming mobile
@@ -9,10 +10,11 @@ support in user-facing documentation.
 
 ## Build under test
 
-- Version: `0.6.6`
+- Version: `0.6.7`
 - Minimum Obsidian version: `1.12.7`
 - Distribution: GitHub prerelease installed through BRAT
-- Bundle: `main.js` is 26.25 MB, primarily the embedded IPADIC dictionary
+- Bundle: `main.js` is 26.25 MB (27,522,047 bytes, re-measured for 0.6.7),
+  primarily the embedded IPADIC dictionary
 - Network access at runtime: none
 
 Record the tested commit and exact bundle size for each test round.
@@ -21,7 +23,7 @@ Record the tested commit and exact bundle size for each test round.
 
 | Platform | OS version | Device | Obsidian version | Vault size | Result |
 |---|---|---|---|---:|---|
-| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use through v0.6.1 passed; v0.6.6 pending |
+| iOS/iPadOS | Not recorded | iPhone 13 | Not recorded | Not recorded | Basic use through v0.6.1 passed; v0.6.6 and v0.6.7 pending |
 | Android | — | — | — | — | Pending |
 
 Only platforms required for the release need a passing result. Untested
@@ -32,8 +34,8 @@ platforms must remain explicitly labeled as unverified.
 1. Back up the Vault or use a representative test Vault.
 2. Install and enable BRAT from Community plugins.
 3. Add `kogedango/suggested-notes-plugin` as a beta plugin.
-4. Select the `0.6.6` prerelease and enable Suggested Notes, confirming its
-   manifest reports `0.6.6`.
+4. Select the `0.6.7` prerelease and enable Suggested Notes, confirming its
+   manifest reports `0.6.7`.
 5. Fully quit and restart Obsidian before cold-start measurements.
 
 ## Required checks
@@ -42,6 +44,14 @@ platforms must remain explicitly labeled as unverified.
 
 - BRAT downloads and enables the plugin without an error.
 - Obsidian can reopen the Vault after a full process termination.
+- A cold start does not slide the right sidebar open. The app opens on the
+  note, not on this view. Check this on the launch right after enabling the
+  plugin and again after a full quit and restart.
+- The command "Open related notes for the active note" still opens the view,
+  including while startup indexing is still running.
+- After the view has been opened once, quitting and restarting leaves it
+  closed but still present as a tab in the right sidebar, and opening that tab
+  shows results for the active note.
 - Metadata-based suggestions appear before morphology initialization finishes.
 - The UI remains responsive while the Japanese and English analyzers initialize.
 - The plugin does not crash or get disabled after initialization.

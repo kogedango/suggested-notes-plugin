@@ -5,7 +5,6 @@ import {
   TAbstractFile,
   TFile,
   WorkspaceItem,
-  WorkspaceLeaf,
   debounce,
   normalizePath,
 } from "obsidian";
@@ -178,7 +177,7 @@ export default class RelatedNotesPlugin extends Plugin {
     );
 
     this.app.workspace.onLayoutReady(() => {
-      this.activateView();
+      this.activateView(false);
       this.waitForMetadataResolved().then(() => this.initialMetadataIndex());
     });
 
@@ -844,19 +843,36 @@ export default class RelatedNotesPlugin extends Plugin {
   }
 
   // onLayoutReady and the command both call this, and neither awaits it. The
-  // leaf lookup below is synchronous but `setViewState` is not, so two calls
-  // that overlap would both see no leaf and both create one — and
+  // leaf lookup in ensureView is synchronous but `setViewState` is not, so two
+  // calls that overlap would both see no leaf and both create one — and
   // `getRightLeaf(false)` hands out a fresh leaf per call, so that produces two
   // instances of this view in the same sidebar. Sharing the in-flight promise
   // makes the lookup-and-create pair effectively atomic.
-  activateView(): Promise<void> {
-    this.activateViewPromise ??= this.openOrRevealView().finally(() => {
-      this.activateViewPromise = null;
-    });
-    return this.activateViewPromise;
+  //
+  // `reveal` is false at startup. On mobile the right sidebar is a drawer that
+  // covers the screen, so revealing it on every launch means the app always
+  // starts with this view in the way. Creating the leaf without revealing it
+  // keeps the view one tap away in the sidebar and leaves the workspace as the
+  // user left it. Only an explicit command reveals.
+  activateView(reveal = true): Promise<void> {
+    const pending = (this.activateViewPromise ??= this.ensureView().finally(
+      () => {
+        this.activateViewPromise = null;
+      },
+    ));
+    if (!reveal) return pending;
+    // Reveal after the shared promise settles rather than inside it: a startup
+    // call already in flight carries reveal=false, and the command must still
+    // open the view when it lands in that window.
+    return pending.then(() => this.revealView());
   }
 
-  private async openOrRevealView(): Promise<void> {
+  private async revealView(): Promise<void> {
+    const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_RELATED_NOTES)[0];
+    if (leaf) await this.app.workspace.revealLeaf(leaf);
+  }
+
+  private async ensureView(): Promise<void> {
     const { workspace } = this.app;
     // Duplicates left by an older build (see activateView) still need clearing,
     // but only within one container. `getLeavesOfType` walks the main area
@@ -865,26 +881,22 @@ export default class RelatedNotesPlugin extends Plugin {
     // opposite of what this method is for. Two copies in *different* containers
     // are a layout the user built, not damage to repair.
     const roots = new Set<WorkspaceItem>();
-    const kept: WorkspaceLeaf[] = [];
     for (const candidate of workspace.getLeavesOfType(VIEW_TYPE_RELATED_NOTES)) {
       const root = candidate.getRoot();
       if (roots.has(root)) candidate.detach();
-      else {
-        roots.add(root);
-        kept.push(candidate);
-      }
+      else roots.add(root);
     }
 
-    let leaf: WorkspaceLeaf | null = kept[0] ?? null;
-    if (!leaf) {
-      leaf = workspace.getRightLeaf(false);
-      if (leaf)
-        await leaf.setViewState({
-          type: VIEW_TYPE_RELATED_NOTES,
-          active: true,
-        });
-    }
-    if (leaf) await workspace.revealLeaf(leaf);
+    if (roots.size > 0) return;
+    // `active: false` — on mobile `active: true` alone can slide the drawer
+    // open, which is the behaviour this method exists to avoid. revealLeaf, in
+    // activateView, is what makes the leaf active when the user asks for it.
+    const leaf = workspace.getRightLeaf(false);
+    if (leaf)
+      await leaf.setViewState({
+        type: VIEW_TYPE_RELATED_NOTES,
+        active: false,
+      });
   }
 
   async copyLinkToClipboard(

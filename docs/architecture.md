@@ -154,6 +154,15 @@ Startup order is an invariant:
 8. Synchronize title tokens in bounded chunks.
 9. Synchronize the body corpus when body matching is enabled.
 
+Step 1 creates the view's leaf when none exists, but never reveals it. Startup
+must not change which sidebar tab is active: on mobile the right sidebar is a
+drawer covering the screen, so revealing it there means every launch begins with
+this view in the way. Only an explicit command reveals the view. Because the
+leaf is created inactive, Obsidian may keep the view deferred until the user
+opens it; code that reaches views through leaves narrows with `instanceof` and
+skips deferred ones, and `onOpen` requests a refresh when the view is finally
+constructed.
+
 Titles are updated on create, rename, and delete. A body edit does not rebuild
 all titles.
 
